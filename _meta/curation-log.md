@@ -6,3 +6,4 @@
 2026-09-02  run-20260902-163339  FEEDBACK  knowledge/patterns/validation-order  served 3 held 3 failed 0 → high
 2026-09-02  run-20260902-163339  FEEDBACK  knowledge/tools/cs-optional-properties  served 2 held 2 failed 0 → medium
 2026-09-02  run-20260902-163339  FEEDBACK  knowledge/workarounds/schema-validation-workaround  served 2 held 0 failed 0 → low
+2026-09-02  run-20260902-184533  COMPACT  episodes/_summaries/2026-08  1 episode(s)
