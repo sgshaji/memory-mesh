@@ -157,7 +157,10 @@ def checkpoint(vault: Vault, path: Path, text: str, now: datetime | None = None)
         if line.startswith("## What happened"):
             in_wh = True
         elif in_wh and line.startswith("## "):
+            while out and not out[-1].strip():
+                out.pop()  # keep exactly one blank line before the next heading
             out.append(f"- [checkpoint {stamp}] {clean}")
+            out.append("")
             inserted = True
             in_wh = False
         out.append(line)

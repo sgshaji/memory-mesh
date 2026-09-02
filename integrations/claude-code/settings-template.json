@@ -1,5 +1,5 @@
 {
-  "//": "TEMPLATE — verify hook event names and matcher syntax against your installed Claude Code version before use. Paths assume the vault root as working directory.",
+  "//": "REFERENCE ONLY — prefer `python integrations/claude-code/install.py`, which merges into ~/.claude/settings.json without clobbering existing settings and supports --uninstall. Shape verified against Claude Code 2.1.240; the installer writes the exec form with absolute paths, which is what you want on Windows.",
   "hooks": {
     "SessionStart": [
       {

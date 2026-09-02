@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: on the FIRST prompt of a session, match the domain
-router and print the matched index plus linked notes (bounded recall). Later
-prompts are a silent no-op — automatic memory acts at most three times per
-session (session-lifecycle.md)."""
+"""UserPromptSubmit: on the FIRST prompt of a session, match the domain router
+and inject the matched index plus its linked notes. Every later prompt is a
+silent no-op — memory acts at most three times per session, never per message.
 
-import sys
+This hook must never fail loudly: a nonzero exit here would block the user's
+prompt and erase what they typed.
+"""
 
-from _common import read_payload, run_cli
+from _common import read_payload, run
 
 payload = read_payload()
 session = str(payload.get("session_id") or "default")
-prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
+# `user_prompt` is the documented field; `prompt` kept as a fallback
+prompt = str(payload.get("user_prompt") or payload.get("prompt") or payload.get("raw_user_input") or "")
+
 if not prompt.strip():
-    sys.exit(0)
-sys.exit(run_cli(["session-prompt", prompt, "--tool", "claude-code", "--session", session]))
+    raise SystemExit(0)
+
+run("UserPromptSubmit", ["session-prompt", prompt, "--tool", "claude-code", "--session", session])

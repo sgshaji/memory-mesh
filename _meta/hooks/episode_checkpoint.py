@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""PreCompact hook: append a checkpoint (time + last user prompt) so long
-sessions lose nothing when context is compacted. Before the stub exists the
-checkpoint parks in disposable session state; session-end folds it in."""
+"""PreCompact: park a checkpoint so a long session loses nothing when its
+context is compacted. Injects nothing back into the session — it only
+records. The parked text is redacted before it touches disk."""
 
-import sys
-
-from _common import read_payload, run_cli
+from _common import read_payload, run
 
 payload = read_payload()
 session = str(payload.get("session_id") or "default")
-last_prompt = str(payload.get("prompt") or payload.get("last_user_prompt") or "context compacted")
-sys.exit(run_cli(["episode", "checkpoint", "--session", session, "--text", last_prompt[:300]]))
+last = str(payload.get("user_prompt") or payload.get("prompt") or "context compacted")
+
+run(
+    "PreCompact",
+    ["episode", "checkpoint", "--session", session, "--text", last[:300]],
+    inject=False,
+)

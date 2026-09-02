@@ -100,10 +100,25 @@ Status: resolved.
 
 ## I-014 — Claude Code hook payloads
 Mandate Section O: do not assume hook names/payload formats without verifying.
-The installed host here supports SessionStart/UserPromptSubmit/PreCompact/
-SessionEnd hooks; scripts read stdin JSON defensively (missing keys tolerated,
-fall back to env/args) and settings snippets are shipped as TEMPLATE with a
-verification note. Severity: MEDIUM. Status: resolved (defensive design).
+**Now verified against Claude Code 2.1.240** and installed, not templated:
+
+- the four events exist as named; `SessionStart` and `PreCompact` take
+  matchers (`startup|resume|clear`, `manual|auto`);
+- the prompt arrives as `user_prompt`, not `prompt` (the defensive fallback
+  had been masking this);
+- context is injected via `hookSpecificOutput.additionalContext` — a
+  top-level `additionalContext` is silently ignored on `UserPromptSubmit`;
+- **exit codes are load-bearing**: on `UserPromptSubmit`, exit 2 blocks the
+  prompt and *erases the user's input*, and any nonzero code shows an error.
+  The original scripts propagated the CLI's exit code, so a vault problem
+  could have cost a typed prompt. Every hook now exits 0 unconditionally
+  (`_common.run`), turning any memory failure into silence;
+- `SessionEnd` hooks share a ~1.5s budget unless a per-hook `timeout` raises
+  it (set to 15s; the stub write measures ~0.2s);
+- the exec form (`command` + `args`) is used instead of a shell string
+  because the vault path contains spaces.
+
+Severity: MEDIUM. Status: resolved (verified against the installed host).
 
 ## I-015 — schema.md `status` vocabulary vs `unreviewed`
 curator.md §3 (inbox pressure) moves stale inbox items to
@@ -199,3 +214,14 @@ workarounds / Active project. Rationale: the twelve-link cap protects bounded
 recall, and Recently verified / Recently changed are curator-maintained
 mirrors whose growth must never evict live links. Severity: LOW.
 Status: resolved (documented interpretation).
+
+## I-026 — GitHub Copilot gained lifecycle hooks after the frozen V1 contract
+The frozen session contract classifies Copilot CLI and VS Code as
+instruction-grade because lifecycle hooks were unavailable when it was
+written. Current GitHub Copilot CLI supports repository and user-level
+`sessionStart`, `userPromptTransformed`, `preCompact`, and `sessionEnd` hooks.
+**Resolution:** the CLI now has a deterministic adapter in
+`integrations/github-copilot/`; VS Code shares the same instructions and agent
+skills but remains skill-driven because it does not execute Copilot CLI hook
+files. The user installer makes the integration available across repositories
+without making tool-native memory canonical. Severity: LOW. Status: resolved.
