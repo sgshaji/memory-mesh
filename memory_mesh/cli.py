@@ -154,6 +154,8 @@ def cmd_session_end(args) -> int:
             episodes.checkpoint(vault, path, cp.get("text", ""), now=at)
         else:
             episodes.checkpoint(vault, path, str(cp))
+    # the session is over: its scratch state has served its only purpose
+    recall_mod.clear_session_state(vault, sid)
     _print(f"episode stub: {vault.rel(path)} (status: raw — fill it and run `memory episode finish`)")
     return 0
 
@@ -173,9 +175,12 @@ def cmd_episode(args) -> int:
         if args.path:
             episodes.checkpoint(vault, vault.path(args.path), args.text or "")
         else:  # before the stub exists, checkpoints park in session state
+            # the parked text is a raw user prompt: redact before it touches
+            # disk, exactly like every other capture path (P10/G1)
+            clean, _ = redact.redact(args.text or "", vault)
             state = recall_mod.load_session_state(vault, sid)
             state.setdefault("checkpoints", []).append({
-                "text": args.text or "",
+                "text": clean,
                 "at": datetime.now().astimezone().isoformat(timespec="seconds"),
             })
             recall_mod.save_session_state(vault, sid, state)

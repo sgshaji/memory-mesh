@@ -41,7 +41,18 @@ from ..router import load_domains, match as router_match
 from .adapter import NullAdapter, ReasoningAdapter
 from .decisions import Decision
 from .neighbours import find_neighbours, jaccard, keywords
-from .review import archive_review_file, parse_review_file, pending_review_files, review_path, write_review_file
+from .review import (
+    SUPPRESSIONS,
+    archive_review_file,
+    is_fully_decided,
+    load_suppressions,
+    parse_review_file,
+    pending_review_files,
+    record_suppression,
+    review_path,
+    suppression_key,
+    write_review_file,
+)
 
 _TYPE_DIR = {
     "pattern": "knowledge/patterns",
@@ -106,11 +117,19 @@ def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: date
 
     _apply_approved_reviews(vault, report, today)
 
-    inbox_items = [
-        n for n in iter_notes(vault, config.INBOX)
-        if n.type in ("candidate", None) and "processed" not in n.meta and "hold_hash" not in n.meta
-    ]
-    held_items = [n for n in iter_notes(vault, config.INBOX) if "hold_hash" in n.meta and "processed" not in n.meta]
+    inbox_items = []
+    held_items = []
+    for n in iter_notes(vault, config.INBOX):
+        if n.type not in ("candidate", None) or "processed" in n.meta:
+            continue
+        if "hold_hash" in n.meta:
+            if _hold_hash(n) == n.meta.get("hold_hash"):
+                held_items.append(n)  # unchanged since the HOLD — still waiting
+                continue
+            # §4 HOLD: "re-evaluated on the next evidence" — the item changed,
+            # so it re-enters the pipeline with its hold marks cleared
+            n = _release_hold(vault, n, report)
+        inbox_items.append(n)
     episodes_ready = [
         n for n in iter_notes(vault, config.EPISODES)
         if n.type == "episode" and n.status == "summarised"
@@ -124,12 +143,22 @@ def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: date
     declared_domains = [d.name for d in load_domains(vault)]
 
     for item in inbox_items:
+        if item.parse_error:
+            # malformed frontmatter is reportable, never fatal: the item was
+            # still redacted in place above, it just cannot be read for meaning
+            report.warnings.append(f"{item.rel}: unreadable frontmatter ({item.parse_error}); skipped, fix and re-run")
+            continue
         _scan_injection(item, report)
+        if _reference_fallback(vault, item, report, today):
+            continue  # §2.1: content that cannot be redacted meaningfully
         claims = _claims_from_inbox(vault, item, declared_domains)
         produced = _decide_claims(vault, claims, known_hashes, adapter, report, today)
         _mark_inbox_processed(vault, item, report, produced)
 
     for ep in episodes_ready:
+        if ep.parse_error:
+            report.warnings.append(f"{ep.rel}: unreadable frontmatter ({ep.parse_error}); skipped, fix and re-run")
+            continue
         _scan_injection(ep, report)
         claims = _claims_from_episode(vault, ep, declared_domains, adapter)
         produced = _decide_claims(vault, claims, known_hashes, adapter, report, today)
@@ -145,17 +174,86 @@ def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: date
     return report
 
 
+def _hold_hash(note: Note) -> str:
+    """Hash covering frontmatter and body, minus the hold marks themselves —
+    a domain fix lives in the frontmatter, so a body-only hash would miss the
+    very edit the HOLD asked for."""
+    meta = {k: v for k, v in note.meta.items() if k not in ("hold_hash", "hold_reason")}
+    return _hash_text(frontmatter.compose(meta, note.body))
+
+
+def _release_hold(vault: Vault, note: Note, report: RunReport) -> Note:
+    meta = {k: v for k, v in note.meta.items() if k not in ("hold_hash", "hold_reason")}
+    fsutil.curator_write(vault, note.path, frontmatter.compose(meta, note.body))
+    report.touched.add(note.rel)
+    report.log("UNHOLD", note.ref, "item changed since the hold — re-evaluating")
+    return load_note(note.path, vault)
+
+
 def _redaction_pass(vault: Vault, note: Note, report: RunReport) -> Note:
+    """Redact in place before anything is read for meaning (§2.1).
+
+    Redaction must survive malformed input: an item whose frontmatter will not
+    parse is still written back redacted, then reported — never allowed to
+    abort the run and leave the secret on disk.
+    """
     text = note.path.read_text(encoding="utf-8")
     clean, findings = redact.redact(text, vault)
-    if findings:
+    if not findings:
+        return note
+    try:
         meta, body = frontmatter.parse(clean)
         meta["sensitivity"] = "redacted"
-        fsutil.curator_write(vault, note.path, frontmatter.compose(meta, body))
-        report.touched.add(note.rel)
-        report.log("REDACT", note.ref, ", ".join(f.rule for f in findings))
-        return load_note(note.path, vault)
-    return note
+        out = frontmatter.compose(meta, body)
+    except frontmatter.FrontmatterError as e:
+        out = clean  # unparseable: preserve the file verbatim, minus the secrets
+        report.warnings.append(f"{note.rel}: redacted in place but frontmatter is malformed ({e})")
+    fsutil.curator_write(vault, note.path, out)
+    report.touched.add(note.rel)
+    report.log("REDACT", note.ref, ", ".join(f.rule for f in findings))
+    return load_note(note.path, vault)
+
+
+_REDACTION_TOKEN_RE = re.compile(r"\[(?:redacted[a-z-]*|customer|tenant|internal-url|email)\]")
+
+
+def _reference_fallback(vault: Vault, item: Note, report: RunReport, today: date) -> bool:
+    """§2.1: content that cannot be redacted meaningfully becomes a Reference
+    note pointing at the original location, instead of a claim built out of
+    redaction tokens. Returns True when the item was handled this way."""
+    text = " ".join(fact for _, fact in item.observations()) or item.title
+    tokens_found = _REDACTION_TOKEN_RE.findall(text)
+    words = max(len(text.split()), 1)
+    if len(tokens_found) < 3 or len(tokens_found) / words <= 0.2:
+        return False
+    title = str(item.meta.get("title") or item.path.stem)
+    title = _REDACTION_TOKEN_RE.sub("", title).strip() or item.path.stem
+    meta = {
+        "type": "reference",
+        "title": f"Source: {title}"[:120],
+        "domains": [d for d in (item.meta.get("domains") or []) if d][:3] or ["unclassified"],
+        "status": "candidate",
+        "trust": str(item.meta.get("trust") or "unknown"),
+        "confidence": "low",
+        "first_observed": str(item.meta.get("captured", today.isoformat()))[:10],
+        "evidence": [],
+        "superseded_by": None,
+        "source": str(item.meta.get("source") or item.ref),
+    }
+    body = (
+        "## Observations\n"
+        f"- [pointer] the substance stayed at its original location; see `{item.meta.get('source') or item.ref}`\n"
+        "- [reason] too much of this item was customer, tenant or credential material to admit as a claim\n"
+    )
+    path = fsutil.unique_path(vault.path("knowledge/references") / f"{fsutil.safe_slug(title, 48)}.md")
+    fsutil.curator_write(vault, path, frontmatter.compose(meta, body))
+    report.touched.add(vault.rel(path))
+    report.log("REFERENCE", vault.rel(path)[:-3], f"from {item.ref} (too sensitive to admit as a claim)")
+    meta_item = dict(item.meta)
+    meta_item["processed"] = report.run_id
+    fsutil.curator_write(vault, item.path, frontmatter.compose(meta_item, item.body))
+    report.touched.add(item.rel)
+    return True
 
 
 def _scan_injection(note: Note, report: RunReport) -> None:
@@ -434,8 +532,8 @@ def _mark_inbox_processed(vault: Vault, item: Note, report: RunReport, produced:
     gated = [d for d in report.decisions if d.source_ref == item.ref and d.gated]
     meta = dict(note.meta)
     if holds and not produced and not gated:
-        # stays candidate, re-evaluated when its content changes or via review
-        meta["hold_hash"] = _hash_text(note.body)
+        # stays candidate, re-evaluated as soon as the item changes (§4 HOLD)
+        meta["hold_hash"] = _hold_hash(note)
         meta["hold_reason"] = holds[0].rationale[:160]
     else:
         meta["processed"] = report.run_id
@@ -534,6 +632,7 @@ def run_lint(vault: Vault, now: datetime | None = None) -> RunReport:
     _index_hygiene_pass(vault, tally, report, today)
     _inbox_pressure_pass(vault, report, today)
     _graduation_pass(vault, tally, report)
+    _compaction_pass(vault, report, today)
 
     _finalise_run(vault, report, today, f"curator lint {report.run_id}")
     return report
@@ -633,12 +732,15 @@ def _index_move_to_changed(vault: Vault, note: Note, reason: str, report: RunRep
 def _contradiction_pass(vault: Vault, tally: dict[str, _Tally], report: RunReport, today: date) -> None:
     """curator.md §6: single same-version failure → HOLD; repeated → gated
     SUPERSEDE/REJECT; different-version evidence arrives via compile."""
+    suppressed = load_suppressions(vault)
     for note in knowledge_notes(vault):
         if note.parse_error or note.status not in ("validated", "candidate"):
             continue
         t = tally.get(note.path.stem)
         if not t or t.fb.failed == 0:
             continue
+        if suppression_key("SUPERSEDE", note.rel) in suppressed:
+            continue  # human held this one; new evidence re-opens it via compile
         note_from = str((note.meta.get("applies_to") or {}).get("from") or "")
         different_version = any(
             (vm := _VERSION_RE.search(reason)) and note_from and vm.group(1) != note_from
@@ -652,7 +754,11 @@ def _contradiction_pass(vault: Vault, tally: dict[str, _Tally], report: RunRepor
                     target_ref=note.ref,
                     payload={
                         "target": note.rel,
-                        "new_ref": f"{_TYPE_DIR.get(note.type or 'pattern', 'knowledge/patterns')}/{note.path.stem}-{today.strftime('%Y-%m')}",
+                        # no replacement note exists yet, so no `superseded_by`
+                        # is recorded — a dangling ref would break §6's promise
+                        # that history stays navigable. The window is closed and
+                        # the successor arrives with its own evidence.
+                        "new_ref": "",
                         "new_content": "",
                         "close_to": today.isoformat(),
                         "diff": f"failures: {'; '.join(t.fail_reasons[:3])}",
@@ -682,12 +788,15 @@ def _contradiction_pass(vault: Vault, tally: dict[str, _Tally], report: RunRepor
 
 def _duplicate_pass(vault: Vault, report: RunReport) -> None:
     validated = [n for n in knowledge_notes(vault) if n.status == "validated" and not n.parse_error]
+    suppressed = load_suppressions(vault)
     for i, a in enumerate(validated):
         for b in validated[i + 1 :]:
             if a.type != b.type:
                 continue
             if not set(a.meta.get("domains") or []) & set(b.meta.get("domains") or []):
                 continue
+            if suppression_key("MERGE", a.rel, b.rel) in suppressed:
+                continue  # human said "keep both" — do not ask again
             obs_a = keywords(" ".join(f for _, f in a.observations()))
             obs_b = keywords(" ".join(f for _, f in b.observations()))
             if jaccard(obs_a, obs_b) >= 0.4:
@@ -716,7 +825,7 @@ def _orphan_pass(vault: Vault, report: RunReport, today: date) -> None:
             continue
         _index_add_note(vault, note, report, today)
         still_linked = any(load_index(vault, d) and load_index(vault, d).find(note.path.stem) for d in note.meta.get("domains") or [])
-        if not still_linked:
+        if not still_linked and suppression_key("REJECT", note.rel) not in load_suppressions(vault):
             report.decisions.append(
                 Decision("REJECT", "validated note linked from no index and no index has room", target_ref=note.ref, payload={"target": note.rel})
             )
@@ -809,6 +918,55 @@ def _inbox_pressure_pass(vault: Vault, report: RunReport, today: date) -> None:
         report.log("PARK", n.ref, "inbox pressure → episodes/_unreviewed")
 
 
+def _compaction_pass(vault: Vault, report: RunReport, today: date) -> None:
+    """episode.md rule 6: monthly, the curator writes
+    `episodes/_summaries/YYYY-MM.md`. Raw episodes stay.
+
+    Deterministic aggregation, not summarisation (mandate §G): the digest
+    carries each episode's goal line, decisions, problems and knowledge
+    outcomes verbatim. Only complete months are compacted, and an existing
+    summary is never rewritten.
+    """
+    current_month = today.strftime("%Y-%m")
+    by_month: dict[str, list[Note]] = {}
+    for ep in iter_notes(vault, config.EPISODES):
+        if ep.type != "episode" or ep.parse_error:
+            continue
+        if ep.rel.startswith((config.EPISODE_SUMMARIES, config.EPISODE_UNREVIEWED)):
+            continue
+        if ep.status != "mined":
+            continue  # only settled episodes compact
+        month = str(ep.meta.get("captured", ""))[:7]
+        if len(month) != 7 or month >= current_month:
+            continue
+        by_month.setdefault(month, []).append(ep)
+
+    for month, eps in sorted(by_month.items()):
+        out = vault.path(config.EPISODE_SUMMARIES) / f"{month}.md"
+        if out.exists():
+            continue
+        lines = [f"# Episodes — {month}", "", f"{len(eps)} mined episode(s). Raw episodes stay; this digest is derived."]
+        for ep in sorted(eps, key=lambda e: str(e.meta.get("captured", ""))):
+            parsed = parse_episode(ep)
+            lines += ["", f"## [[{ep.ref}]]", f"- [goal] {section(ep.body, 'Goal').strip().splitlines()[0] if section(ep.body, 'Goal').strip() else '(none recorded)'}"]
+            for d in parsed.decisions:
+                lines.append(f"- [decision] {d}")
+            for p in parsed.problems:
+                lines.append(f"- [problem] {p}")
+            for u in parsed.used:
+                lines.append(f"- [outcome] [[{u.ref}]] — {u.outcome}")
+        meta = {
+            "type": "episode-summary",
+            "title": f"Episodes {month}",
+            "month": month,
+            "episodes": len(eps),
+            "generated": today.isoformat(),
+        }
+        fsutil.curator_write(vault, out, frontmatter.compose(meta, "\n".join(lines)))
+        report.touched.add(vault.rel(out))
+        report.log("COMPACT", vault.rel(out)[:-3], f"{len(eps)} episode(s)")
+
+
 def _graduation_pass(vault: Vault, tally: dict[str, _Tally], report: RunReport) -> None:
     lines: list[str] = []
     for note in knowledge_notes(vault):
@@ -836,14 +994,21 @@ def _graduation_pass(vault: Vault, tally: dict[str, _Tally], report: RunReport) 
 def _apply_approved_reviews(vault: Vault, report: RunReport, today: date) -> None:
     for path in pending_review_files(vault):
         items = parse_review_file(path)
-        gated = [i for i in items if i.kind in ("MERGE", "SUPERSEDE", "REJECT")]
-        approved = [i for i in gated if i.approved]
-        for item in approved:
-            try:
-                _apply_review_item(vault, item, report, today)
-            except Exception as e:  # a broken payload must not halt the run
-                report.warnings.append(f"review item failed: {item.kind} {item.header}: {e}")
-        if gated and all(i.approved for i in gated):
+        for item in items:
+            if item.kind in ("MERGE", "SUPERSEDE", "REJECT") and item.approved:
+                try:
+                    _apply_review_item(vault, item, report, today)
+                except Exception as e:  # a broken payload must not halt the run
+                    report.warnings.append(f"review item failed: {item.kind} {item.header}: {e}")
+            elif item.choice:
+                # the human chose an alternative: record it so the proposal is
+                # not regenerated every run (curator.md §7 / §10 time budget)
+                p = item.payload or {}
+                refs = [str(p[k]) for k in ("target", "other") if p.get(k)] or [item.header]
+                record_suppression(vault, suppression_key(item.kind, *refs), item.choice, today.isoformat())
+                report.touched.add(SUPPRESSIONS)
+                report.log(item.kind, item.header[:60], f"human chose `{item.choice}` — not re-proposed")
+        if is_fully_decided(items):
             archived = archive_review_file(vault, path)
             report.touched.add(vault.rel(archived))
             report.touched.add(vault.rel(path))

@@ -17,6 +17,7 @@ from .notes import Note
 NOTE_TYPES: dict[str, tuple[str, str]] = {
     "candidate": ("00-inbox", "agent"),
     "episode": ("episodes", "agent"),
+    "episode-summary": ("episodes/_summaries", "curator"),
     "pattern": ("knowledge/patterns", "curator"),
     "tool-behaviour": ("knowledge/tools", "curator"),
     "workaround": ("knowledge/workarounds", "curator"),

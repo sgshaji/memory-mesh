@@ -91,6 +91,26 @@ class TestContradiction(unittest.TestCase):
         props = [d for d in report.decisions if d.kind == "SUPERSEDE" and "different version" in d.rationale]
         self.assertTrue(props)
 
+    def test_supersede_no_dangling_reference(self):
+        # a supersession with no successor note must not point superseded_by
+        # at a note that was never created (§6: history stays navigable)
+        self.test_repeated_same_version_failure_proposes_supersede()
+        f = pending_review_files(self.vault)[0]
+        f.write_text(f.read_text(encoding="utf-8").replace("[ ] approve   [ ] hold", "[x] approve   [ ] hold"), encoding="utf-8")
+        engine.run_compile(self.vault, now=NOW)
+        meta, _ = fm_parse(self.vault.path("knowledge/tools/cs-optional-properties.md").read_text(encoding="utf-8"))
+        self.assertEqual(meta["status"], "superseded")
+        ref = meta.get("superseded_by")
+        self.assertIsNone(ref, f"superseded_by should be null, got {ref!r}")
+        from memory_mesh.notes import resolve_ref
+
+        for di_name in ("copilot-studio",):
+            from memory_mesh.indexes import parse_index
+
+            di = parse_index(self.vault.path(f"knowledge/_index/{di_name}.md"), self.vault)
+            for _s, e in di.all_entries():
+                self.assertIsNotNone(resolve_ref(self.vault, e.ref), f"index links dangling ref {e.ref}")
+
     def test_approved_supersede_closes_window_and_keeps_history(self):
         self.test_repeated_same_version_failure_proposes_supersede()
         f = pending_review_files(self.vault)[0]

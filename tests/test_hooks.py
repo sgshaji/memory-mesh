@@ -83,6 +83,17 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("| domain | scope | match |", r.stdout)
 
+    def test_checkpoint_text_redacted_and_state_cleared(self):
+        run_cli(self.vault, "session-prompt", "copilot studio work", "--session", "s5")
+        run_cli(self.vault, "episode", "checkpoint", "--session", "s5", "--text", "retry with password = hunter22secret now")
+        state_file = recall.session_state_path(self.vault, "s5")
+        self.assertNotIn("hunter22secret", state_file.read_text(encoding="utf-8"))
+        run_cli(self.vault, "session-end", "--session", "s5", "--slug", "redacted-chk")
+        # session scratch must not linger in the vault after the stub exists
+        self.assertFalse(state_file.exists())
+        stub = list(self.vault.path("episodes").glob("*redacted-chk*.md"))[0]
+        self.assertNotIn("hunter22secret", stub.read_text(encoding="utf-8"))
+
     def test_status_and_doctor(self):
         rc, out = run_cli(self.vault, "status")
         self.assertEqual(rc, 0)

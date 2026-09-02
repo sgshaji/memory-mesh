@@ -155,6 +155,16 @@ def save_session_state(vault: Vault, session_id: str, state: dict) -> None:
     fsutil.agent_write(vault, session_state_path(vault, session_id), json.dumps(state, indent=2))
 
 
+def clear_session_state(vault: Vault, session_id: str) -> None:
+    """Session scratch exists only to assemble the episode stub; once that is
+    written it must not linger in the vault tree."""
+    p = session_state_path(vault, session_id)
+    try:
+        p.unlink()
+    except (OSError, FileNotFoundError):
+        pass
+
+
 def _update_session_state(vault: Vault, session_id: str, result: RecallResult) -> None:
     state = load_session_state(vault, session_id)
     state.setdefault("retrieved", [])

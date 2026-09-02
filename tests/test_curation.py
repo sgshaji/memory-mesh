@@ -308,6 +308,90 @@ class TestCuration(unittest.TestCase):
         for p in self.vault.path("knowledge").rglob("*.md"):
             self.assertNotIn("hunter2secret99", p.read_text(encoding="utf-8"), msg=str(p))
 
+    def test_malformed_inbox_item_does_not_brick_the_run(self):
+        # unparseable frontmatter + a secret: the run must still redact it,
+        # report it, and keep processing everything else (gap loop 3)
+        bad = self.vault.path("00-inbox/2026-09-02-broken.md")
+        bad.write_text("---\ntype: candidate\n:::\nno closing delimiter\npassword = hunter22secret\n", encoding="utf-8")
+        _write_episode(self.vault, "2026-09-02-claude-code-alive",
+                       "agent flows cap at two minutes of runtime (copilot-studio, 2026-09)", domains="[copilot-studio]")
+        report = engine.run_compile(self.vault, now=NOW)  # must not raise
+        text = bad.read_text(encoding="utf-8")
+        self.assertNotIn("hunter22secret", text)
+        self.assertIn("[redacted-secret]", text)
+        self.assertTrue(any("malformed" in w or "unreadable" in w for w in report.warnings), report.warnings)
+        self.assertTrue(any(l.startswith("MINED") for l in report.log_lines))  # the run continued
+
+    def test_held_item_reevaluated_after_edit(self):
+        capture.learn(self.vault, "watering the garden at dawn reduces evaporation", source_tool="t")
+        engine.run_compile(self.vault, now=NOW)
+        held = [n for n in iter_notes(self.vault, config.INBOX) if "hold_hash" in n.meta]
+        self.assertEqual(len(held), 1)
+        # a second run leaves it held, not reprocessed
+        r2 = engine.run_compile(self.vault, now=NOW)
+        self.assertTrue(any("on hold" in w for w in r2.warnings))
+        # the human supplies the missing domain — the HOLD must release
+        note = held[0]
+        meta = dict(note.meta)
+        meta["domains"] = ["copilot-studio"]
+        note.path.write_text(compose(meta, note.body), encoding="utf-8")
+        r3 = engine.run_compile(self.vault, now=NOW)
+        self.assertTrue(any(l.startswith("UNHOLD") for l in r3.log_lines), "\n".join(r3.log_lines))
+        after, _ = fm_parse(note.path.read_text(encoding="utf-8"))
+        self.assertNotIn("hold_hash", after)
+
+    def test_review_alternative_retires_item_and_archives(self):
+        self.test_gated_decisions_written_to_review_not_applied()
+        f = pending_review_files(self.vault)[0]
+        # human picks "keep both" instead of approving the MERGE
+        f.write_text(f.read_text(encoding="utf-8").replace(
+            "[ ] approve   [ ] keep both   [ ] edit", "[ ] approve   [x] keep both   [ ] edit"), encoding="utf-8")
+        engine.run_compile(self.vault, now=NOW)
+        a = load_note(self.vault.path("knowledge/patterns/dup-a.md"), self.vault)
+        b = load_note(self.vault.path("knowledge/patterns/dup-b.md"), self.vault)
+        self.assertEqual(a.status, "validated")
+        self.assertEqual(b.status, "validated")  # nothing merged
+        self.assertFalse(f.exists(), "a fully decided review file must archive")
+        # and the same MERGE must never be proposed again
+        r = engine.run_lint(self.vault, now=NOW)
+        merges = [d for d in r.decisions if d.kind == "MERGE"]
+        self.assertEqual(merges, [])
+
+    def test_reference_note_for_unredactable_content(self):
+        raw = self.vault.path("00-inbox/2026-09-02-sensitive-dump.md")
+        raw.write_text(compose(
+            {"type": "candidate", "title": "escalation notes", "source": "teams-dump",
+             "captured": "2026-09-02T09:00:00+05:30", "domains": ["copilot-studio"],
+             "trust": "first-party", "sensitivity": "checked"},
+            "## Observations\n- [observation] Contoso and Fabrikam escalated via https://contoso.sharepoint.com/sites/x "
+            "with tenant id 12345678-abcd-4ef0-9876-1234567890ab and key AKIAIOSFODNN7EXAMPLE\n"), encoding="utf-8")
+        report = engine.run_compile(self.vault, now=NOW)
+        refs = list(self.vault.path("knowledge/references").glob("*.md"))
+        self.assertTrue(refs, "\n".join(report.log_lines))
+        ref_note = load_note(refs[0], self.vault)
+        self.assertEqual(ref_note.type, "reference")
+        body = refs[0].read_text(encoding="utf-8")
+        for leaked in ("Contoso", "sharepoint.com/sites", "AKIAIOSFODNN7EXAMPLE"):
+            self.assertNotIn(leaked, body)
+        meta, _ = fm_parse(raw.read_text(encoding="utf-8"))
+        self.assertTrue(str(meta.get("processed", "")).startswith("run-"))
+
+    def test_monthly_compaction(self):
+        engine.run_compile(self.vault, now=NOW)  # mine the fixture episodes
+        engine.run_lint(self.vault, now=NOW)
+        summary = self.vault.path("episodes/_summaries/2026-08.md")
+        self.assertTrue(summary.exists())
+        text = summary.read_text(encoding="utf-8")
+        self.assertIn("2026-08-14-claude-code-api-change", text)
+        self.assertIn("[decision]", text)
+        # the current month is never compacted, and raw episodes stay
+        self.assertFalse(self.vault.path("episodes/_summaries/2026-09.md").exists())
+        self.assertTrue(self.vault.path("episodes/2026-08-14-claude-code-api-change.md").exists())
+        # rerun is idempotent
+        before = text
+        engine.run_lint(self.vault, now=NOW)
+        self.assertEqual(before, summary.read_text(encoding="utf-8"))
+
     def test_curation_log_written(self):
         _write_episode(self.vault, "2026-09-02-claude-code-t9",
                        "flows time out beyond two minutes in agent flows (copilot-studio, 2026-09)", domains="[copilot-studio]")
