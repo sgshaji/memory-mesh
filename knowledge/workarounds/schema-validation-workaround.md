@@ -10,7 +10,7 @@ applies_to:
   from: 2026-08
 first_observed: 2026-09-01
 last_verified: null
-feedback: {served: 1, held: 0, failed: 0, unclear: 0}
+feedback: {served: 2, held: 0, failed: 0, unclear: 0}
 evidence: [episodes/2026-09-01-copilot-studio-schema-stage]
 superseded_by: null
 source: "episode: episodes/2026-09-01-copilot-studio-schema-stage"

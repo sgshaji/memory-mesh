@@ -4,13 +4,13 @@ title: Deterministic validation before any LLM reasoning
 domains: [copilot-studio, agent-skills]
 status: validated
 trust: first-party
-confidence: medium
+confidence: high
 applies_to:
   tools: [copilot-studio, claude-code]
   from: 2026-08
 first_observed: 2026-08-14
-last_verified: 2026-09-01
-feedback: {served: 2, held: 2, failed: 0, unclear: 0}
+last_verified: 2026-09-02
+feedback: {served: 3, held: 3, failed: 0, unclear: 0}
 evidence: [episodes/2026-08-14-claude-code-api-change, episodes/2026-09-01-copilot-studio-schema-stage]
 superseded_by: null
 source: "episode: episodes/2026-08-14-claude-code-api-change"

@@ -1,9 +1,10 @@
 ---
 type: index
-domain: _general
+domain: "_general"
 updated: 2026-09-02
 links: 2
 ---
+
 # General (fallback)
 
 ## Read first
@@ -17,5 +18,6 @@ links: 2
 - [[projects/copilot-studio-skills]]
 
 ## Recently verified (30 days)
+- [[validation-order]] — held 2026-09-02
 
 ## Recently changed

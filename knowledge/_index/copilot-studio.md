@@ -4,6 +4,7 @@ domain: copilot-studio
 updated: 2026-09-02
 links: 5
 ---
+
 # Copilot Studio
 
 ## Read first
@@ -20,6 +21,7 @@ links: 5
 - [[projects/copilot-studio-skills]]
 
 ## Recently verified (30 days)
-- [[cs-optional-properties]] — held 2026-09-01
+- [[cs-optional-properties]] — held 2026-09-02
+- [[validation-order]] — held 2026-09-02
 
 ## Recently changed

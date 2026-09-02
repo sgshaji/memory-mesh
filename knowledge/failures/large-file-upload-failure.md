@@ -10,7 +10,7 @@ applies_to:
   from: 2026-08
 first_observed: 2026-08-20
 last_verified: null
-feedback: {served: 0, held: 0, failed: 0, unclear: 0}
+feedback: {served: 1, held: 0, failed: 0, unclear: 0}
 evidence: [episodes/2026-08-14-claude-code-api-change]
 superseded_by: null
 source: "episode: episodes/2026-08-14-claude-code-api-change"

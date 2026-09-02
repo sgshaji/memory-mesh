@@ -4,6 +4,7 @@ domain: agent-skills
 updated: 2026-09-02
 links: 1
 ---
+
 # Agent skills
 
 ## Read first
@@ -16,5 +17,6 @@ links: 1
 ## Active project
 
 ## Recently verified (30 days)
+- [[validation-order]] — held 2026-09-02
 
 ## Recently changed
