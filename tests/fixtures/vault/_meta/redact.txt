@@ -1,0 +1,16 @@
+# Redaction rules — applied to EVERY capture, episode and curated item
+# before it is admitted to the vault (principles.md #10).
+#
+# One rule per line:
+#   Contoso                      literal, case-insensitive → [customer]
+#   literal:Fabrikam             same, explicit
+#   regex:acme-[a-z0-9]+        regex → [redacted]
+#   rule => [token]              custom replacement token
+#
+# Built-in secret/tenant/internal-URL patterns always run and cannot be
+# disabled here. Add your customer names and internal hostnames below.
+
+# Example synthetic entries (safe to replace):
+literal:Contoso
+literal:Fabrikam => [customer]
+regex:https?://[a-z0-9.-]+\.corp\.example\.com/[^\s]* => [internal-url]

@@ -1,0 +1,45 @@
+{
+  "//": "TEMPLATE — verify hook event names and matcher syntax against your installed Claude Code version before use. Paths assume the vault root as working directory.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"_meta/hooks/recall_start.py\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"_meta/hooks/recall_domain.py\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"_meta/hooks/episode_checkpoint.py\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"_meta/hooks/episode_stub.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

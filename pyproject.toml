@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-mesh"
+version = "0.1.0"
+description = "Local-first personal AI memory & knowledge system. Markdown is the only source of truth."
+requires-python = ">=3.10"
+# Zero runtime dependencies by design (mandate §D): stdlib only.
+dependencies = []
+
+[project.scripts]
+memory = "memory_mesh.cli:main"
+
+[tool.setuptools]
+packages = ["memory_mesh", "memory_mesh.curator"]
