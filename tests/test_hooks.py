@@ -53,9 +53,11 @@ class TestHooks(unittest.TestCase):
         self.assertIn("domains: [copilot-studio]", text)
 
     def test_session_end_without_retrieval_skips_episode(self):
+        recall.save_session_state(self.vault, "never-recalled", {"started": "now"})
         rc, out = run_cli(self.vault, "session-end", "--session", "never-recalled")
         self.assertEqual(rc, 0)
         self.assertIn("skipping", out)
+        self.assertFalse(recall.session_state_path(self.vault, "never-recalled").exists())
 
     def test_checkpoint_parks_in_state_then_lands_in_stub(self):
         run_cli(self.vault, "session-prompt", "copilot studio work", "--session", "s4")

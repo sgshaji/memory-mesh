@@ -54,6 +54,20 @@ python -m memory_mesh.cli lint             # read-only health check anytime
 
 (`pip install -e .` gives you the same commands as plain `memory ...`.)
 
+### GitHub Copilot CLI and VS Code
+
+Repository hooks and skills are included. To make Memory Mesh available to
+GitHub Copilot from every repository on this computer:
+
+```powershell
+python integrations\github-copilot\install.py
+```
+
+Restart Copilot CLI and VS Code, then verify `/instructions` and
+`/skills list`. Copilot CLI performs recall and episode-stub creation through
+hooks; VS Code exposes `/memory-recall`, `/memory-learn`, and
+`/memory-episode`.
+
 ## How recall stays small
 
 ```
@@ -79,6 +93,7 @@ outputs/context/     compiled context packs (derived, expiring, rebuildable)
 _meta/spec/          the frozen V1 contracts (authoritative)
 _meta/hooks/         deterministic lifecycle hooks (Claude Code reference)
 integrations/        per-host wiring: hooks, instructions, Lane B file contract
+.github/              GitHub Copilot instructions, hooks, skills and agents
 memory_mesh/         the stdlib-only Python implementation
 tests/               115+ unit/integration tests (python -m unittest discover -s tests)
 ```

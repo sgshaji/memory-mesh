@@ -24,7 +24,7 @@ Statuses: `UNSATISFIED` · `PARTIAL` · `SATISFIED` · `BLOCKED` · `N/A-V1`.
 | P2 | three memory tiers | SATISFIED | vault layout; `memory_mesh/config.py`, `schema.py` type→folder map | `tests/test_schema.py::test_type_folder_map` | — |
 | P3 | experience != truth | SATISFIED | episodes never canonical; only curator promotes (`curator/engine.py`) | `tests/test_curation.py::test_third_party_never_promotes`, `tests/test_capture.py::test_never_writes_canonical` | P2 |
 | P4 | curator-only canonical writes | SATISFIED | `memory_mesh/fsutil.py` write boundaries | `tests/test_safety.py::test_write_boundaries_agent`, `::test_write_boundaries_curator` | P2 |
-| P5 | mechanism over instruction | SATISFIED | `_meta/hooks/*` deterministic scripts; CLAUDE.md carries policy only | `tests/test_hooks.py::test_hook_scripts_run_as_processes` | I1,I2 |
+| P5 | mechanism over instruction | SATISFIED | `_meta/hooks/*` and `.github/hooks/*` deterministic scripts; host instruction files carry policy | `tests/test_hooks.py::test_hook_scripts_run_as_processes`, `tests/test_copilot_integration.py::test_session_lifecycle_hooks` | I1,I2,I4 |
 | P6 | smallest relevant context | SATISFIED | `memory_mesh/recall.py` budgets | `tests/test_recall.py::test_note_budget_ceiling`, `::test_recall_token_budget_skip` | R1,R2,R3 |
 | P7 | evidence + temporal validity | SATISFIED | `memory_mesh/schema.py` frontmatter; `confidence.py` | `tests/test_schema.py`, `tests/test_feedback.py` | — |
 | P8 | feedback loop | SATISFIED | episodes *Knowledge used* → tally → confidence → indexes → recall | `tests/test_feedback.py`, `tests/test_e2e.py::test_full_loop` | L7,C12,R2 |
@@ -99,7 +99,7 @@ Statuses: `UNSATISFIED` · `PARTIAL` · `SATISFIED` · `BLOCKED` · `N/A-V1`.
 | I1 | Claude Code policy | SATISFIED | `CLAUDE.md` (policy only) | doc review | — |
 | I2 | Claude Code deterministic hooks | SATISFIED | `_meta/hooks/*.py` + `integrations/claude-code/` (settings TEMPLATE, I-014) | `tests/test_hooks.py::test_hook_scripts_run_as_processes` | L1,L3,L6 |
 | I3 | generic AGENTS.md policy | SATISFIED | `AGENTS.md` | doc review | — |
-| I4 | VS Code/Cursor instructions | SATISFIED | `integrations/vscode-copilot/`, `integrations/cursor/` | doc review | I3 |
+| I4 | GitHub Copilot CLI/VS Code and Cursor | SATISFIED | `.github/copilot-instructions.md`, `.github/hooks/`, `.github/skills/`, `integrations/github-copilot/`, `integrations/cursor/` | `tests/test_copilot_integration.py`, doc review | I3,L1-L7 |
 | I5 | Lane B file contract | SATISFIED | `integrations/lane-b/CONTRACT.md` (contract-only by mandate) | doc review | — |
 | I6 | Cowork context-pack contract | SATISFIED | `integrations/cowork/CONTRACT.md` + freshness rule | `tests/test_packs.py::test_freshness_rule` | R5,R6 |
 | I7 | Teams/OneDrive bridge spec | SATISFIED | `integrations/lane-b/CONTRACT.md` §Teams Dump | doc review | I5 |
@@ -131,7 +131,7 @@ Statuses: `UNSATISFIED` · `PARTIAL` · `SATISFIED` · `BLOCKED` · `N/A-V1`.
 
 | edge | meaning | verified_by |
 |---|---|---|
-| L1→L2→L3→L4 | start injects router+project → first prompt routes → bounded recall → silent work | `tests/test_hooks.py` (start/prompt/once-per-session tests) |
+| L1→L2→L3→L4 | start injects router+project → first prompt routes → bounded recall → silent work | `tests/test_hooks.py` (start/prompt/once-per-session tests), `tests/test_copilot_integration.py::test_session_lifecycle_hooks` |
 | L4→L5 | work → deliberate capture lands in inbox | `tests/test_capture.py` |
 | L4→L6 | work → episode stub → summarised | `tests/test_episodes.py`, `tests/test_hooks.py::test_session_end_writes_stub_from_state` |
 | L3→L7 | retrieved pre-filled in stub; only /episode sets *used* | `tests/test_episodes.py::test_retrieved_vs_used_distinction` |

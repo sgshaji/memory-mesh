@@ -133,6 +133,7 @@ def cmd_session_end(args) -> int:
     state = recall_mod.load_session_state(vault, sid)
     retrieved = state.get("retrieved", [])
     if not retrieved and not args.force:
+        recall_mod.clear_session_state(vault, sid)
         _print("session retrieved nothing; skipping the episode (episode.md: may skip)")
         return 0
     domains = [d for d in state.get("domains", []) if d] or ["unclassified"]

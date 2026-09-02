@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 \"integrations/github-copilot/hook.py\" session-start",
+        "powershell": "python \"integrations/github-copilot/hook.py\" session-start",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptTransformed": [
+      {
+        "type": "command",
+        "bash": "python3 \"integrations/github-copilot/hook.py\" session-prompt",
+        "powershell": "python \"integrations/github-copilot/hook.py\" session-prompt",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "bash": "python3 \"integrations/github-copilot/hook.py\" pre-compact",
+        "powershell": "python \"integrations/github-copilot/hook.py\" pre-compact",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "python3 \"integrations/github-copilot/hook.py\" session-end",
+        "powershell": "python \"integrations/github-copilot/hook.py\" session-end",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
