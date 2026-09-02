@@ -16,10 +16,12 @@ description: Finish a GitHub Copilot work session by recording decisions, failur
    python "integrations/github-copilot/memory.py" episode create --tool github-copilot --slug copilot-session
    ```
 
-2. Open the exact path printed by step 1. Fill its seven sections without changing the
-   pre-filled **Knowledge retrieved** list. Put only exercised notes under
-   **Knowledge used**, each with `held`, `failed`, `unclear`, or
-   `not-applicable` and a short reason.
+2. The printed path is relative to the Memory Mesh vault. Open the exact file
+   at `<MEMORY_MESH_ROOT>/<episode-path>`. When running this project skill
+   without the user installer, `<MEMORY_MESH_ROOT>` is the repository root.
+   Fill its seven sections without changing the pre-filled **Knowledge
+   retrieved** list. Put only exercised notes under **Knowledge used**, each
+   with `held`, `failed`, `unclear`, or `not-applicable` and a short reason.
 3. Finish that same explicit path:
 
    ```text

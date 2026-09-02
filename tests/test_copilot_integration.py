@@ -159,6 +159,10 @@ class TestCopilotIntegration(unittest.TestCase):
                 skill = home / "skills" / name / "SKILL.md"
                 self.assertTrue(skill.exists())
                 self.assertIn(str(ROOT / "integrations" / "github-copilot" / "memory.py"), skill.read_text(encoding="utf-8"))
+            self.assertIn(
+                str(ROOT),
+                (home / "skills" / "memory-episode" / "SKILL.md").read_text(encoding="utf-8"),
+            )
 
             resource = home / "skills" / "memory-recall" / "user-resource.txt"
             resource.write_text("keep", encoding="utf-8")
@@ -174,6 +178,104 @@ class TestCopilotIntegration(unittest.TestCase):
             self.assertFalse((home / "instructions" / "memory-mesh.instructions.md").exists())
             self.assertTrue(resource.exists())
             self.assertFalse((home / "memory-mesh-install.json").exists())
+
+    def test_installer_refuses_new_path_collision_during_upgrade(self):
+        with tempfile.TemporaryDirectory(prefix="mm-copilot-home-") as td:
+            home = Path(td)
+            first = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+            manifest_path = home / "memory-mesh-install.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            rel = "skills/memory-learn/SKILL.md"
+            manifest["files"].pop(rel)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            upgrade = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(upgrade.returncode, 1)
+            self.assertIn("newly managed existing files", upgrade.stderr)
+
+    def test_uninstaller_rejects_manifest_path_escape(self):
+        with tempfile.TemporaryDirectory(prefix="mm-copilot-home-") as td:
+            base = Path(td)
+            home = base / "copilot"
+            home.mkdir()
+            victim = base / "victim.txt"
+            victim.write_text("keep", encoding="utf-8")
+            (home / "memory-mesh-install.json").write_text(json.dumps({
+                "version": 1,
+                "files": {"../victim.txt": "not-relevant"},
+            }), encoding="utf-8")
+
+            remove = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home), "--uninstall"],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(remove.returncode, 1)
+            self.assertIn("escapes Copilot home", remove.stderr)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "keep")
+
+    def test_installer_rejects_symlinked_managed_directory(self):
+        with tempfile.TemporaryDirectory(prefix="mm-copilot-home-") as td:
+            base = Path(td)
+            home = base / "copilot"
+            outside = base / "outside"
+            home.mkdir()
+            outside.mkdir()
+            try:
+                (home / "hooks").symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            install = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(install.returncode, 1)
+            self.assertIn("contains a symlink", install.stderr)
+            self.assertFalse((outside / "memory-mesh.json").exists())
+
+    def test_uninstaller_rejects_symlinked_managed_file(self):
+        with tempfile.TemporaryDirectory(prefix="mm-copilot-home-") as td:
+            home = Path(td) / "copilot"
+            install = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(install.returncode, 0, install.stderr)
+            hook = home / "hooks" / "memory-mesh.json"
+            target = home / "target.json"
+            target.write_text(hook.read_text(encoding="utf-8"), encoding="utf-8")
+            hook.unlink()
+            try:
+                hook.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"file symlinks unavailable: {exc}")
+
+            remove = subprocess.run(
+                [sys.executable, str(INSTALLER), "--home", str(home), "--uninstall"],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(remove.returncode, 1)
+            self.assertIn("contains a symlink", remove.stderr)
+            self.assertTrue(target.exists())
 
 
 if __name__ == "__main__":

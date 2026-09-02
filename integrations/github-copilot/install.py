@@ -77,7 +77,8 @@ def _managed_content(home: Path) -> dict[Path, str]:
     for name in SKILLS:
         target = home / "skills" / name / "SKILL.md"
         skill = (source_skills / name / "SKILL.md").read_text(encoding="utf-8")
-        content[target] = skill.replace(script_rel, script_abs)
+        content[target] = (skill.replace(script_rel, script_abs)
+                           .replace("<MEMORY_MESH_ROOT>", root_text))
     return content
 
 
@@ -88,13 +89,33 @@ def _load_manifest(home: Path) -> dict | None:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("files"), dict):
         raise RuntimeError(f"invalid Memory Mesh install manifest: {path}")
+    if not all(isinstance(rel, str) and isinstance(digest, str) for rel, digest in value["files"].items()):
+        raise RuntimeError(f"invalid Memory Mesh install manifest entries: {path}")
     return value
+
+
+def _managed_path(home: Path, rel: str) -> Path:
+    relative = Path(rel)
+    if relative.is_absolute():
+        raise RuntimeError(f"managed path must be relative to Copilot home: {rel}")
+    target = home / relative
+    current = home
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"managed path contains a symlink: {rel}")
+    resolved = target.resolve()
+    try:
+        resolved.relative_to(home.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"managed path escapes Copilot home: {rel}") from exc
+    return target
 
 
 def _changed_managed_files(home: Path, manifest: dict) -> list[Path]:
     changed = []
     for rel, expected in manifest["files"].items():
-        path = home / rel
+        path = _managed_path(home, rel)
         if path.exists() and _digest(path.read_text(encoding="utf-8")) != expected:
             changed.append(path)
     return changed
@@ -102,11 +123,18 @@ def _changed_managed_files(home: Path, manifest: dict) -> list[Path]:
 
 def install(home: Path, force: bool = False) -> list[Path]:
     content = _managed_content(home)
+    for path in content:
+        _managed_path(home, path.relative_to(home).as_posix())
     manifest = _load_manifest(home)
     if manifest:
+        owned = {_managed_path(home, rel) for rel in manifest["files"]}
         changed = _changed_managed_files(home, manifest)
         if changed and not force:
             raise RuntimeError("refusing to overwrite modified managed files: " + ", ".join(map(str, changed)))
+        collisions = [path for path in content if path.exists() and path not in owned]
+        if collisions and not force:
+            raise RuntimeError("refusing to overwrite newly managed existing files without --force: "
+                               + ", ".join(map(str, collisions)))
     elif not force:
         collisions = [path for path in content if path.exists()]
         if collisions:
@@ -136,7 +164,7 @@ def uninstall(home: Path, force: bool = False) -> list[Path]:
         changed = _changed_managed_files(home, manifest)
         if changed and not force:
             raise RuntimeError("refusing to remove modified managed files: " + ", ".join(map(str, changed)))
-        targets = [home / rel for rel in manifest["files"]]
+        targets = [_managed_path(home, rel) for rel in manifest["files"]]
     elif force:
         targets = list(_managed_content(home))
     else:
