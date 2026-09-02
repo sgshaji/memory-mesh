@@ -136,5 +136,6 @@ def freshness(meta: dict, now: datetime | None = None) -> str:
         return "not-authoritative"
     if dt <= until:
         return "current"
+    # "expired by more than twice the window → not authoritative"
     window = until - gen
-    return "stale" if dt <= until + window else "not-authoritative"
+    return "stale" if dt <= until + 2 * window else "not-authoritative"

@@ -186,7 +186,7 @@ def validate_summary(note: Note) -> list[str]:
                 f"[[{use.ref}]] appears under Knowledge used but not Knowledge retrieved — add it to both"
             )
     words = len(note.body.split())
-    if words > config.EPISODE_WORD_BUDGET * 2:
+    if words > config.EPISODE_WORD_BUDGET:
         problems.append(f"body is {words} words; target ≤ {config.EPISODE_WORD_BUDGET}")
     return problems
 

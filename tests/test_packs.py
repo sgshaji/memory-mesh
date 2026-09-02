@@ -59,7 +59,9 @@ class TestPacks(unittest.TestCase):
         meta = {"generated_at": gen.isoformat(), "valid_until": (gen + timedelta(days=7)).isoformat()}
         self.assertEqual(packs.freshness(meta, gen + timedelta(days=3)), "current")
         self.assertEqual(packs.freshness(meta, gen + timedelta(days=10)), "stale")
-        self.assertEqual(packs.freshness(meta, gen + timedelta(days=15)), "not-authoritative")
+        # "expired by more than twice the window" (7d window → expired >14d)
+        self.assertEqual(packs.freshness(meta, gen + timedelta(days=20)), "stale")
+        self.assertEqual(packs.freshness(meta, gen + timedelta(days=22)), "not-authoritative")
         self.assertEqual(packs.freshness({}, NOW), "not-authoritative")
 
     def test_rebuild_after_deletion(self):

@@ -39,6 +39,7 @@ class RecallResult:
     indexes: list[DomainIndex]
     notes: list[ServedNote] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    missing_indexes: list[str] = field(default_factory=list)  # declared domains without an index file
     token_total: int = 0
 
     def context_markdown(self) -> str:
@@ -61,26 +62,27 @@ def recall(
     domains_decl = router.load_domains(vault)
     matched = router.match(task_text, domains_decl, limit=2)
     unclassified = not matched
-    if unclassified:
-        matched_for_index = ["_general"]
-        result_domains = ["unclassified"]
-    else:
-        matched_for_index = matched
-        result_domains = matched
+    result_domains = ["unclassified"] if unclassified else matched
 
     indexes: list[DomainIndex] = []
-    for name in matched_for_index:
-        di = load_index(vault, name.lstrip("_")) if not name.startswith("_") else None
-        if name == "_general":
-            p = vault.path(config.GENERAL_INDEX)
-            if p.exists():
-                from .indexes import parse_index
-
-                di = parse_index(p, vault)
+    missing: list[str] = []
+    for name in matched:
+        di = load_index(vault, name)
         if di is not None:
             indexes.append(di)
+        else:
+            missing.append(name)  # declared domain, no index file — a vault defect lint reports
+    if not indexes:
+        # nothing matched, or every matched domain lacks an index: serve the
+        # general fallback so recall never silently returns nothing
+        p = vault.path(config.GENERAL_INDEX)
+        if p.exists():
+            from .indexes import parse_index
+
+            indexes.append(parse_index(p, vault))
 
     result = RecallResult(result_domains, unclassified, indexes)
+    result.missing_indexes = missing
 
     # Collect candidate links in section-priority order, round-robin across
     # domains so a two-domain task still respects the single shared budget.

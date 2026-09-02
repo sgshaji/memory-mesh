@@ -486,8 +486,18 @@ def _index_add_note(vault: Vault, note: Note, report: RunReport, today: date) ->
     """Same-run index update on promotion (spec: same commit)."""
     sec = _INDEX_SECTION_FOR_TYPE.get(note.type or "", "Read first")
     gloss = " ".join(note.title.split()[:12])
+    declared = {d.name for d in load_domains(vault)}
     for domain in note.meta.get("domains") or []:
         di = load_index(vault, domain)
+        if di is None and domain in declared:
+            # a declared domain earns its index the moment content exists
+            # (empty sections stay — they tell the agent there is nothing known)
+            from ..indexes import DomainIndex as _DI, SECTIONS as _SECS, index_path as _ipath
+
+            di = _DI(domain=domain, path=_ipath(vault, domain), title=domain.replace("-", " ").title())
+            for s in _SECS:
+                di.sections[s] = []
+            report.log("INDEX-CREATE", domain, "index created for declared domain")
         if di is None:
             report.warnings.append(f"no index for domain `{domain}`; [[{note.ref}]] not linked")
             continue

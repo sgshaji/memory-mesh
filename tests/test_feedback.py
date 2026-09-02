@@ -100,6 +100,52 @@ class TestFeedbackTally(unittest.TestCase):
         self.assertEqual(wa.fb.served, 1)  # retrieved but never used
         self.assertEqual(wa.fb.held, 0)
 
+    def test_unclear_outcome_tallied(self):
+        from datetime import datetime, timezone
+
+        body = """---
+type: episode
+tool: claude-code
+domains: [copilot-studio]
+captured: 2026-09-02T09:00:00+05:30
+trust: first-party
+sensitivity: checked
+status: summarised
+session_ref: u-1
+---
+
+# Session: unclear test
+
+## Goal
+g
+
+## What happened
+- worked
+
+## Decisions
+
+## Problems
+
+## Knowledge retrieved
+- [[validation-order]]
+- [[cs-optional-properties]]
+
+## Knowledge used
+- [[validation-order]] — unclear — could not tell whether the sequence mattered
+- [[cs-optional-properties]]
+
+## Candidate learnings
+"""
+        self.vault.path("episodes/2026-09-02-claude-code-unclear.md").write_text(body, encoding="utf-8")
+        tally = engine._tally_from_episodes(self.vault)
+        self.assertEqual(tally["validation-order"].fb.unclear, 1)
+        # a used line with no outcome token defaults to unclear (never to held)
+        self.assertEqual(tally["cs-optional-properties"].fb.unclear, 1)
+        engine.run_lint(self.vault, now=datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc))
+        meta, _ = fm_parse(self.vault.path("knowledge/patterns/validation-order.md").read_text(encoding="utf-8"))
+        self.assertEqual(meta["feedback"], {"served": 3, "held": 2, "failed": 0, "unclear": 1})
+        self.assertEqual(meta["confidence"], "medium")  # unclear neither helps nor harms
+
     def test_lint_writes_feedback_and_last_verified(self):
         from datetime import datetime, timezone
 

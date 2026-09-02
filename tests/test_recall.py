@@ -91,6 +91,46 @@ class TestRecall(unittest.TestCase):
         self.assertTrue(state.get("recalled"))
         self.assertTrue(any("validation-order" in r for r in state.get("retrieved", [])))
 
+    def test_recall_token_budget_skip(self):
+        # oversized notes force the 2,000-token ceiling before the 6-note cap
+        di_path = self.vault.path("knowledge/_index/copilot-studio.md")
+        extra = []
+        for i in range(3):
+            rel = f"knowledge/patterns/huge-{i}.md"
+            obs = "\n".join(f"- [behaviour] long filler observation {i}-{j} with many additional words to inflate the token estimate substantially" for j in range(60))
+            self.vault.path(rel).write_text(compose(
+                {"type": "pattern", "title": f"huge {i}", "domains": ["copilot-studio"], "status": "validated",
+                 "trust": "first-party", "evidence": ["episodes/2026-08-14-claude-code-api-change"]},
+                "## Observations\n" + obs + "\n"), encoding="utf-8")
+            extra.append(f"- [[huge-{i}]] — huge filler")
+        text = di_path.read_text(encoding="utf-8").replace("## Read first", "## Read first\n" + "\n".join(extra))
+        di_path.write_text(text, encoding="utf-8")
+        res = recall.recall(self.vault, "copilot studio work", log=False)
+        self.assertLessEqual(res.token_total, config.TOKEN_BUDGET_RECALL)
+        self.assertLessEqual(len(res.notes), config.RECALL_MAX_NOTES)
+        self.assertTrue(any("token budget" in s for s in res.skipped), res.skipped)
+
+    def test_missing_index_falls_back_to_general(self):
+        # a router-declared domain without an index must not serve nothing
+        self.vault.path("knowledge/_index/cowork.md").unlink()
+        res = recall.recall(self.vault, "cowork frontier plugin scheduled prompts", log=False)
+        self.assertEqual(res.domains, ["cowork"])
+        self.assertFalse(res.unclassified)
+        self.assertEqual(res.missing_indexes, ["cowork"])
+        self.assertTrue(any(di.path.name == "_general.md" for di in res.indexes))
+        self.assertTrue(res.notes)  # the general index still serves something
+        # and the deterministic lint reports the vault defect
+        import io
+        from contextlib import redirect_stdout
+
+        from memory_mesh import cli
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.main(["--root", str(self.vault.root), "lint"])
+        self.assertEqual(rc, 1)
+        self.assertIn("has no index file", buf.getvalue())
+
     def test_unresolved_link_skipped_not_fatal(self):
         di_path = self.vault.path("knowledge/_index/copilot-studio.md")
         text = di_path.read_text(encoding="utf-8").replace(

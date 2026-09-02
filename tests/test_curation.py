@@ -243,6 +243,71 @@ class TestCuration(unittest.TestCase):
         meta, _ = fm_parse(moved[0].read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "unreviewed")
 
+    def test_neighbours(self):
+        from memory_mesh.curator.neighbours import find_neighbours
+
+        # keyword overlap ranks the closest note first
+        neigh = find_neighbours(self.vault, "schema generator omits optional properties unless declared",
+                                ["copilot-studio"], ["copilot-studio"], "tool-behaviour")
+        self.assertTrue(neigh)
+        self.assertEqual(neigh[0].note.path.stem, "cs-optional-properties")
+        self.assertGreater(neigh[0].similarity, 0.2)
+        # shared domain + applies_to.tools alone clear the inclusion bar
+        neigh2 = find_neighbours(self.vault, "entirely unrelated zebra quartz text",
+                                 ["copilot-studio"], ["copilot-studio"], None)
+        self.assertTrue(neigh2)
+        self.assertLess(neigh2[0].similarity, 0.1)
+        # index-linked notes outrank unlinked ones at equal text similarity
+        linked_stems = {n.note.path.stem for n in neigh}
+        self.assertIn("cs-optional-properties", linked_stems)
+
+    def test_reject_gated(self):
+        # a validated orphan whose only domain index is full → gated REJECT
+        di_path = self.vault.path("knowledge/_index/coding-agents.md")
+        fillers = []
+        for i in range(12):
+            rel = f"knowledge/patterns/filler-{i}.md"
+            self.vault.path(rel).write_text(compose(
+                {"type": "pattern", "title": f"filler {i}", "domains": ["coding-agents"], "status": "validated",
+                 "trust": "first-party", "evidence": ["episodes/2026-08-14-claude-code-api-change"]},
+                f"## Observations\n- [behaviour] zebra{i} quartz{i} matrix{i} vector{i}\n"), encoding="utf-8")
+            fillers.append(f"- [[filler-{i}]] — filler {i}")
+        text = di_path.read_text(encoding="utf-8").replace("## Read first", "## Read first\n" + "\n".join(fillers))
+        di_path.write_text(text, encoding="utf-8")
+        orphan = self.vault.path("knowledge/patterns/widget-orphan.md")
+        orphan.write_text(compose(
+            {"type": "pattern", "title": "widget assembly ordering", "domains": ["coding-agents"], "status": "validated",
+             "trust": "first-party", "evidence": ["episodes/2026-08-14-claude-code-api-change"]},
+            "## Observations\n- [behaviour] widgets assemble strictly in declaration order\n"), encoding="utf-8")
+        report = engine.run_lint(self.vault, now=NOW)
+        rejects = [d for d in report.decisions if d.kind == "REJECT" and "widget-orphan" in d.target_ref]
+        self.assertTrue(rejects, msg="\n".join(f"{d.kind} {d.target_ref}" for d in report.decisions))
+        self.assertEqual(load_note(orphan, self.vault).status, "validated")  # gated: nothing applied
+        f = pending_review_files(self.vault)[0]
+        content = f.read_text(encoding="utf-8")
+        self.assertIn("## REJECT  knowledge/patterns/widget-orphan", content)
+        f.write_text(content.replace("[ ] approve   [ ] keep as candidate", "[x] approve   [ ] keep as candidate"), encoding="utf-8")
+        engine.run_compile(self.vault, now=NOW)
+        self.assertEqual(load_note(orphan, self.vault).status, "rejected")
+
+    def test_redact_before_admission(self):
+        # a rogue tool writes an unredacted inbox file directly — the curator
+        # pass is the last line of defence before canonical admission (P10/G1)
+        raw = self.vault.path("00-inbox/2026-09-02-rogue-secret.md")
+        raw.write_text(compose(
+            {"type": "candidate", "title": "auth flow note", "source": "rogue-tool", "captured": "2026-09-02T09:00:00+05:30",
+             "domains": ["copilot-studio"], "trust": "first-party", "sensitivity": "checked"},
+            "## Observations\n- [observation] the copilot studio topic flow needs password = hunter2secret99 to authenticate (copilot-studio, 2026-09)\n"), encoding="utf-8")
+        report = engine.run_compile(self.vault, now=NOW)
+        inbox_text = raw.read_text(encoding="utf-8")
+        self.assertNotIn("hunter2secret99", inbox_text)
+        self.assertIn("[redacted-secret]", inbox_text)
+        meta, _ = fm_parse(inbox_text)
+        self.assertEqual(meta["sensitivity"], "redacted")
+        self.assertTrue(any(l.startswith("REDACT") for l in report.log_lines))
+        for p in self.vault.path("knowledge").rglob("*.md"):
+            self.assertNotIn("hunter2secret99", p.read_text(encoding="utf-8"), msg=str(p))
+
     def test_curation_log_written(self):
         _write_episode(self.vault, "2026-09-02-claude-code-t9",
                        "flows time out beyond two minutes in agent flows (copilot-studio, 2026-09)", domains="[copilot-studio]")

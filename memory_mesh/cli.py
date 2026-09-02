@@ -146,7 +146,14 @@ def cmd_session_end(args) -> int:
         project=args.project,
     )
     for cp in state.get("checkpoints", []):
-        episodes.checkpoint(vault, path, cp)
+        if isinstance(cp, dict):  # checkpoint keeps its original PreCompact time
+            try:
+                at = datetime.fromisoformat(cp.get("at", ""))
+            except ValueError:
+                at = None
+            episodes.checkpoint(vault, path, cp.get("text", ""), now=at)
+        else:
+            episodes.checkpoint(vault, path, str(cp))
     _print(f"episode stub: {vault.rel(path)} (status: raw — fill it and run `memory episode finish`)")
     return 0
 
@@ -167,7 +174,10 @@ def cmd_episode(args) -> int:
             episodes.checkpoint(vault, vault.path(args.path), args.text or "")
         else:  # before the stub exists, checkpoints park in session state
             state = recall_mod.load_session_state(vault, sid)
-            state.setdefault("checkpoints", []).append(args.text or "")
+            state.setdefault("checkpoints", []).append({
+                "text": args.text or "",
+                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            })
             recall_mod.save_session_state(vault, sid, state)
         _print("checkpoint recorded")
         return 0
@@ -249,9 +259,18 @@ def cmd_lint(args) -> int:
             issues.extend(validate_note(note, vault, domains))
     for di in list_domain_indexes(vault):
         issues.extend(validate_index(di, vault))
-    for problem in redact.lint_user_rules(vault):
-        from .schema import Issue
+    from .schema import Issue
 
+    # router hygiene: token budget, 5-8 domains, every declared domain has an index
+    rt = router_token_estimate(vault)
+    if rt > config.TOKEN_BUDGET_ROUTER:
+        issues.append(Issue(config.ROUTER, "warning", f"router estimates {rt} tokens (budget {config.TOKEN_BUDGET_ROUTER})"))
+    if domains and not (5 <= len(domains) <= 8):
+        issues.append(Issue(config.ROUTER, "warning", f"{len(domains)} domains declared (spec: five to eight)"))
+    for d in domains:
+        if not vault.path(f"{config.INDEX_DIR}/{d}.md").exists():
+            issues.append(Issue(config.ROUTER, "error", f"declared domain `{d}` has no index file — recall for it falls back to _general"))
+    for problem in redact.lint_user_rules(vault):
         issues.append(Issue(config.REDACT_FILE, "warning", problem))
     errors = [i for i in issues if i.severity == "error"]
     for i in issues:
@@ -336,6 +355,9 @@ def cmd_doctor(args) -> int:
         problems.append(f"missing router: {config.ROUTER}")
     if not vault.path(config.GENERAL_INDEX).exists():
         problems.append(f"missing general fallback index: {config.GENERAL_INDEX}")
+    for d in domain_names(vault):
+        if not vault.path(f"{config.INDEX_DIR}/{d}.md").exists():
+            problems.append(f"declared domain `{d}` has no index file")
     if not gitutil.available(vault):
         problems.append("git unavailable or not a repository — history/rollback disabled; curator will require manual commits")
     if sys.version_info < (3, 10):

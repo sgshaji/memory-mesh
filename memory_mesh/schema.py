@@ -225,7 +225,7 @@ def _validate_episode(note: Note, err, warn, in_unreviewed: bool) -> None:
     if "processed" in meta:
         err("episodes never carry `processed:` (curator.md §2); lifecycle is raw→summarised→mined")
     words = len(note.body.split())
-    if words > config.EPISODE_WORD_BUDGET * 2:
+    if words > config.EPISODE_WORD_BUDGET:
         warn(f"episode body is {words} words (target ≤ {config.EPISODE_WORD_BUDGET})")
 
 
