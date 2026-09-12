@@ -1,8 +1,10 @@
+import json
 import unittest
+from datetime import datetime, timezone
 
 from helpers import make_vault
 
-from memory_mesh import capture, config
+from memory_mesh import capture, cli, config
 from memory_mesh.frontmatter import parse as fm_parse
 
 
@@ -68,6 +70,112 @@ class TestCapture(unittest.TestCase):
     def test_empty_capture_rejected(self):
         with self.assertRaises(ValueError):
             capture.learn(self.vault, "   ")
+
+    def test_structured_learning_is_validated_classified_and_written(self):
+        res = capture.learn_structured(self.vault, {
+            "title": "Validate Copilot Studio grounding before publishing",
+            "observations": [
+                {"kind": "scenario", "text": "A Copilot Studio agent uses document grounding."},
+                {"kind": "procedure", "text": "Validate every grounding source before publishing."},
+                {"kind": "outcome", "text": "The validation rejected an unavailable source in the test run."},
+            ],
+            "trust": "first-party",
+        }, source_tool="github-copilot", now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+
+        meta, body = fm_parse(res.path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["domains"], ["copilot-studio"])
+        self.assertEqual(meta["source"], "automatic capture via github-copilot, 2026-09-02")
+        self.assertIn("- [scenario]", body)
+        self.assertIn("- [procedure]", body)
+        self.assertIn("- [outcome]", body)
+
+    def test_structured_learning_requires_action_and_verification(self):
+        with self.assertRaisesRegex(ValueError, "actionable"):
+            capture.learn_structured(self.vault, {
+                "title": "An unsupported observation",
+                "observations": [
+                    {"kind": "scenario", "text": "A scenario occurred."},
+                    {"kind": "outcome", "text": "Something was observed."},
+                ],
+            })
+        with self.assertRaisesRegex(ValueError, "outcome or reproducible evidence"):
+            capture.learn_structured(self.vault, {
+                "title": "An unverified procedure",
+                "observations": [
+                    {"kind": "scenario", "text": "A scenario occurred."},
+                    {"kind": "procedure", "text": "Try this procedure."},
+                ],
+            })
+
+    def test_structured_learning_redacts_every_field_before_writing(self):
+        res = capture.learn_structured(self.vault, {
+            "title": "Contoso grounding workaround",
+            "project": "Contoso rollout",
+            "observations": [
+                {"kind": "workaround", "text": "Use api_key = sk-abcdef1234567890abcdef."},
+                {"kind": "evidence", "text": "Contoso verified the result."},
+            ],
+        })
+        text = res.path.read_text(encoding="utf-8")
+        self.assertNotIn("Contoso", text)
+        self.assertNotIn("sk-abcdef1234567890abcdef", text)
+        self.assertIn("[customer]", text)
+        self.assertIn("[redacted-secret]", text)
+        self.assertTrue(res.redacted)
+
+    def test_structured_learning_rejects_multiline_fields(self):
+        base = {
+            "title": "Single line",
+            "observations": [
+                {"kind": "procedure", "text": "Perform the validated procedure."},
+                {"kind": "evidence", "text": "The test passed."},
+            ],
+        }
+        for field, value in (
+            ("title", "line one\nline two"),
+            ("project", "line one\nline two"),
+        ):
+            data = {**base, field: value}
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "single line"):
+                capture.learn_structured(self.vault, data)
+        data = {
+            **base,
+            "observations": [
+                {"kind": "procedure", "text": "line one\nline two"},
+                {"kind": "evidence", "text": "The test passed."},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "single line"):
+            capture.learn_structured(self.vault, data)
+
+    def test_plain_learning_keeps_legacy_content_hash(self):
+        first = capture.learn(self.vault, "the same exact insight", source_tool="x")
+        meta, _ = fm_parse(first.path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["content_hash"], capture._content_hash("the same exact insight"))
+
+    def test_structured_cli_applies_metadata_flags(self):
+        payload = json.dumps({
+            "title": "A reusable capture procedure",
+            "observations": [
+                {"kind": "procedure", "text": "Run the reusable procedure."},
+                {"kind": "evidence", "text": "The command completed successfully."},
+            ],
+        })
+        rc = cli.main([
+            "--root", str(self.vault.root),
+            "learn", payload,
+            "--structured",
+            "--tool", "github-copilot",
+            "--domain", "coding-agents",
+            "--project", "memory-mesh",
+            "--trust", "third-party",
+        ])
+        self.assertEqual(rc, 0)
+        note = next(self.vault.path(config.INBOX).glob("*reusable-capture-procedure.md"))
+        meta, _ = fm_parse(note.read_text(encoding="utf-8"))
+        self.assertEqual(meta["domains"], ["coding-agents"])
+        self.assertEqual(meta["project"], "memory-mesh")
+        self.assertEqual(meta["trust"], "third-party")
 
 
 if __name__ == "__main__":

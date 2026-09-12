@@ -155,10 +155,13 @@ class TestCopilotIntegration(unittest.TestCase):
             self.assertEqual(hook_config["version"], 1)
             instruction = (home / "instructions" / "memory-mesh.instructions.md").read_text(encoding="utf-8")
             self.assertIn(str(ROOT), instruction)
+            self.assertIn("do not wait for the user", instruction)
             for name in ("memory-recall", "memory-learn", "memory-episode"):
                 skill = home / "skills" / name / "SKILL.md"
                 self.assertTrue(skill.exists())
                 self.assertIn(str(ROOT / "integrations" / "github-copilot" / "memory.py"), skill.read_text(encoding="utf-8"))
+            learn_skill = (home / "skills" / "memory-learn" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(" --structured --tool github-copilot", learn_skill)
             self.assertIn(
                 str(ROOT),
                 (home / "skills" / "memory-episode" / "SKILL.md").read_text(encoding="utf-8"),

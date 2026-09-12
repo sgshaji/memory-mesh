@@ -24,8 +24,10 @@ Restart Copilot CLI from the repository root so it loads the hooks. Verify:
 ```
 
 Copilot CLI recalls automatically. In VS Code, invoke `/memory-recall`,
-`/memory-learn`, and `/memory-episode`; Copilot may also select these skills
-automatically from their descriptions.
+`/memory-learn`, and `/memory-episode`. Copilot is instructed to select
+`/memory-learn` itself when it verifies a reusable finding, structure the
+candidate from the active context, and continue without requiring a special
+user prompt.
 
 ## Use from every repository on this computer
 

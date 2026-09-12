@@ -51,7 +51,36 @@ def _print(s: str = "") -> None:
 def cmd_learn(args) -> int:
     vault = _vault(args)
     text = args.text if args.text else sys.stdin.read()
-    res = capture.learn(vault, text, source_tool=args.tool, domain=args.domain, project=args.project, trust=args.trust)
+    if args.structured:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise VaultError(f"invalid structured learning JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise VaultError("structured learning JSON must be an object")
+        for key, value in (
+            ("domain", args.domain),
+            ("project", args.project),
+            ("trust", args.trust),
+        ):
+            if value is None:
+                continue
+            if key in data and data[key] != value:
+                raise VaultError(f"structured learning `{key}` conflicts with --{key}")
+            data[key] = value
+        try:
+            res = capture.learn_structured(vault, data, source_tool=args.tool)
+        except ValueError as exc:
+            raise VaultError(str(exc)) from exc
+    else:
+        res = capture.learn(
+            vault,
+            text,
+            source_tool=args.tool,
+            domain=args.domain,
+            project=args.project,
+            trust=args.trust or "first-party",
+        )
     verb = "captured" if res.created else "already captured (identical content)"
     _print(f"{verb}: {vault.rel(res.path)}")
     if res.redacted:
@@ -388,7 +417,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tool", default="cli")
     p.add_argument("--domain")
     p.add_argument("--project")
-    p.add_argument("--trust", default="first-party", choices=["first-party", "mixed", "third-party", "unknown"])
+    p.add_argument("--trust", choices=["first-party", "mixed", "third-party", "unknown"])
+    p.add_argument(
+        "--structured",
+        action="store_true",
+        help="validate agent-authored structured JSON before inbox capture",
+    )
     p.set_defaults(fn=cmd_learn)
 
     p = sub.add_parser("recall", help="bounded recall for a task")

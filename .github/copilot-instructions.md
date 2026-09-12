@@ -9,7 +9,8 @@ recall, compaction checkpoints, and session-end episode creation. For VS Code,
 use the project skills:
 
 - `/memory-recall` before substantive work or after a domain change;
-- `/memory-learn` when a reusable observation is discovered;
+- invoke `/memory-learn` yourself when work produces a verified reusable
+  observation; do not wait for the user to formulate or request it;
 - `/memory-episode` before ending a session that made decisions, encountered
   failures, or retrieved knowledge.
 

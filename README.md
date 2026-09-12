@@ -65,8 +65,10 @@ python integrations\github-copilot\install.py
 
 Restart Copilot CLI and VS Code, then verify `/instructions` and
 `/skills list`. Copilot CLI performs recall and episode-stub creation through
-hooks; VS Code exposes `/memory-recall`, `/memory-learn`, and
-`/memory-episode`.
+hooks. During work, Copilot can autonomously turn a verified reusable finding
+into a validated, redacted structured candidate in `00-inbox/`; it does not
+promote candidates into canonical knowledge. VS Code exposes `/memory-recall`,
+`/memory-learn`, and `/memory-episode`.
 
 ## How recall stays small
 
