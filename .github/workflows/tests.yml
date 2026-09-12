@@ -1,0 +1,42 @@
+name: tests
+
+# The only signal available when reviewing an agent's pull request from a
+# phone: every push and pull request runs the full stdlib-only suite.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Memory Mesh
+        run: python -m pip install -e .
+
+      - name: Run the test suite
+        run: python -m unittest discover -s tests -q
+
+      - name: Vault health and schema lint
+        # `doctor --fix` only creates gitignored scaffold directories; `lint`
+        # is read-only and fails the build on schema or index errors.
+        run: |
+          memory doctor --fix
+          memory lint

@@ -1,0 +1,44 @@
+name: "Copilot Setup Steps"
+
+# Runs before the Copilot coding agent starts work, so a session opened from
+# GitHub mobile or github.com lands in a ready environment. Also runs on its
+# own changes so the setup itself stays verifiable.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or Copilot will not pick it up.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Memory Mesh
+        # Zero third-party dependencies by design; the editable install only
+        # provides the `memory` console script the docs and skills refer to.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Smoke check the CLI
+        # `doctor --fix` scaffolds the directories that are deliberately
+        # gitignored (session state, packs) and then validates the vault.
+        run: |
+          memory --help
+          memory doctor --fix
