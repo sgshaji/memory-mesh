@@ -70,6 +70,22 @@ into a validated, redacted structured candidate in `00-inbox/`; it does not
 promote candidates into canonical knowledge. VS Code exposes `/memory-recall`,
 `/memory-learn`, and `/memory-episode`.
 
+### Driving this repository from a phone
+
+The Copilot coding agent can work on this repository from GitHub mobile or
+github.com. Assign an issue to Copilot, or start a session from the Agents
+panel; it opens a pull request you review and merge from the phone.
+
+- `.github/workflows/copilot-setup-steps.yml` prepares its environment
+  (Python 3.13, `pip install -e .`) before the agent starts.
+- `.github/workflows/tests.yml` runs the full suite plus `memory lint` on
+  every pull request — the signal you rely on when reviewing on mobile.
+- `.github/copilot-instructions.md` tells remote sessions how to validate
+  changes and to keep vault records out of code pull requests.
+
+One-time repository setting: **Settings → Copilot → Coding agent** must be
+enabled for the repository (an active Copilot subscription is required).
+
 ## How recall stays small
 
 ```
