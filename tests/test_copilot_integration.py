@@ -8,7 +8,7 @@ from pathlib import Path
 
 from helpers import make_vault
 
-from memory_mesh import recall
+from memory_mesh import frontmatter, recall
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,6 +279,49 @@ class TestCopilotIntegration(unittest.TestCase):
             self.assertEqual(remove.returncode, 1)
             self.assertIn("contains a symlink", remove.stderr)
             self.assertTrue(target.exists())
+
+
+class TestRepositorySkills(unittest.TestCase):
+    SKILLS = ("idea-refine", "interview-me", "spec-driven-development")
+    SOURCE_COMMIT = "be4e44a9fbc5e8df0beaefadbb28bd22ee61cc39"
+
+    def test_skill_manifests_and_attribution(self):
+        for name in self.SKILLS:
+            with self.subTest(skill=name):
+                directory = ROOT / ".github" / "skills" / name
+                meta, body = frontmatter.parse(
+                    (directory / "SKILL.md").read_text(encoding="utf-8")
+                )
+                self.assertEqual(meta["name"], name)
+                self.assertIsInstance(meta["description"], str)
+                self.assertTrue(0 < len(meta["description"]) <= 1024)
+                self.assertIn(f"/{self.SOURCE_COMMIT}/skills/{name}", body)
+                self.assertIn("[LICENSE](LICENSE)", body)
+                license_text = (directory / "LICENSE").read_text(encoding="utf-8")
+                self.assertIn("MIT License", license_text)
+                self.assertIn("Copyright (c) 2025 Addy Osmani", license_text)
+                self.assertIn("THE SOFTWARE IS PROVIDED", license_text)
+
+    def test_idea_refine_supporting_files_are_bundled(self):
+        directory = ROOT / ".github" / "skills" / "idea-refine"
+        body = (directory / "SKILL.md").read_text(encoding="utf-8")
+        for filename in ("examples.md", "frameworks.md", "refinement-criteria.md"):
+            with self.subTest(file=filename):
+                self.assertIn(f"`{filename}`", body)
+                self.assertTrue((directory / filename).read_text(encoding="utf-8").strip())
+
+    def test_skills_have_no_executable_or_unavailable_tool_requirements(self):
+        for name in self.SKILLS:
+            with self.subTest(skill=name):
+                directory = ROOT / ".github" / "skills" / name
+                for path in directory.rglob("*"):
+                    if path.is_file():
+                        self.assertTrue(path.suffix == ".md" or path.name == "LICENSE")
+                body = (directory / "SKILL.md").read_text(encoding="utf-8")
+                self.assertNotIn("AskUserQuestion", body)
+                self.assertNotIn("$ARGUMENTS", body)
+                self.assertNotIn("scripts/idea-refine.sh", body)
+                self.assertNotIn("skills/incremental-implementation/SKILL.md", body)
 
 
 if __name__ == "__main__":
