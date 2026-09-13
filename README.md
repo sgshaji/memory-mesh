@@ -86,6 +86,36 @@ panel; it opens a pull request you review and merge from the phone.
 One-time repository setting: **Settings → Copilot → Coding agent** must be
 enabled for the repository (an active Copilot subscription is required).
 
+### Repository skills for Copilot cloud sessions
+
+Three additional, repository-local skills are included in `.github/skills/`:
+
+| Skill | Ask Copilot |
+|---|---|
+| `interview-me` | “Use interview-me to clarify my goal, one question at a time.” |
+| `idea-refine` | “Use idea-refine to explore how previous work can improve my next task.” |
+| `spec-driven-development` | “Use spec-driven-development to specify the agreed idea before coding.” |
+
+They are adapted from the MIT-licensed
+[Addy Osmani Agent Skills collection](https://github.com/addyosmani/agent-skills/tree/be4e44a9fbc5e8df0beaefadbb28bd22ee61cc39)
+at commit `be4e44a9fbc5e8df0beaefadbb28bd22ee61cc39`. Each skill includes
+its license and adaptation notes; `idea-refine` also includes its three
+supporting reference documents. The optional setup script, plugin hooks,
+personas, and other upstream skills are not installed.
+
+No Copilot CLI installation or setup workflow is needed. Start a **new cloud
+task using a branch containing these files**; for default-branch tasks, merge
+the changes first. Ask for a skill by name and verify that the new session
+discovers it; adding files does not guarantee a running session reloads them.
+These skills are repository-local, not installed into your other repositories
+or Microsoft 365 tools. The user-level installer above still installs only
+the three Memory Mesh lifecycle skills.
+
+Clarification can continue through cloud follow-up messages. Drafts stay in
+the conversation unless you explicitly request a file at a permitted path.
+The skills preserve Memory Mesh's bounded recall, privacy, and curator-owned
+knowledge rules; they do not grant permission to modify frozen V1 specs.
+
 ## How recall stays small
 
 ```
