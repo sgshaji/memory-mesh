@@ -28,8 +28,8 @@ None.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: the instruction requires final deterministic package validation before returning an artifact.
-- [[projects/copilot-studio-skills]] — not-applicable: this was an agent instruction file, not a Studio validation change.
+- [[validation-order]] — held — the instruction requires final deterministic package validation before returning an artifact.
+- [[projects/copilot-studio-skills]] — not-applicable — this was an agent instruction file, not a Studio validation change.
 
 ## Candidate learnings
 None.

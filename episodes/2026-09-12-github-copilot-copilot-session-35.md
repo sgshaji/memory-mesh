@@ -45,7 +45,7 @@ all skills; the user-level junction restored their relative paths.
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] - not-applicable: no LLM processing pipeline was changed.
+- [[validation-order]] - not-applicable - no LLM processing pipeline was changed.
   Installation was independently verified with hashes and the upstream linter.
 
 ## Candidate learnings

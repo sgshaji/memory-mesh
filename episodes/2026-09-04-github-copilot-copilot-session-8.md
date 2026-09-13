@@ -41,10 +41,10 @@ condition; GitHub CI ran with full history and passed the guard.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic validation exposed assertion
+- [[validation-order]] — held — deterministic validation exposed assertion
   weaknesses and confirmed each repair before further review.
-- [[projects/copilot-studio-skills]] — not-applicable: this repository is a
+- [[projects/copilot-studio-skills]] — not-applicable — this repository is a
   Power Automate solution rather than the recalled Copilot Studio skill project.
 
 ## Candidate learnings
-- [[preserve-deployed-field-ids-when-extending-gener]]
+- [[00-inbox/2026-09-04-github-copilot-preserve-deployed-field-ids-when-extending-gener]]

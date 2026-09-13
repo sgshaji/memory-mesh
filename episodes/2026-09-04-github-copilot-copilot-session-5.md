@@ -28,8 +28,8 @@ The read-only reference guard compares `origin/main...HEAD`; with unprotected `m
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic validators were run before semantic review; they passed but did not cover the agent input contract, confirming the need for both layers.
-- [[projects/copilot-studio-skills]] — not-applicable: this separate project note did not affect the repository audit.
+- [[validation-order]] — held — deterministic validators were run before semantic review; they passed but did not cover the agent input contract, confirming the need for both layers.
+- [[projects/copilot-studio-skills]] — not-applicable — this separate project note did not affect the repository audit.
 
 ## Candidate learnings
 - `00-inbox/2026-09-04-github-copilot-validate-agent-input-semantics-not-only-connecto.md`

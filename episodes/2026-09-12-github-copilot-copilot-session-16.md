@@ -32,7 +32,7 @@ None.
 
 ## Knowledge used
 
-- `held` — `validation-order`: the instruction keeps validated skill output as the only acceptable final result.
+- [[validation-order]] — held — the instruction keeps validated skill output as the only acceptable final result.
 
 ## Candidate learnings
 

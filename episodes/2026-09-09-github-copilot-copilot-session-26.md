@@ -27,7 +27,7 @@ Deterministic downstream steps cannot currently consume an agent-created attachm
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] — held: the proposed platform fix preserves deterministic validation and transport outside additional model reasoning.
+- [[validation-order]] — held — the proposed platform fix preserves deterministic validation and transport outside additional model reasoning.
 
 ## Candidate learnings
 - `00-inbox/2026-09-09-github-copilot-created-agent-files-need-a-first-class-workflow.md`

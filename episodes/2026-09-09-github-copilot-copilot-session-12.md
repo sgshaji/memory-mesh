@@ -27,7 +27,7 @@ The desired direct handoff from a created-file card to a later workflow step is 
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] — held: the recommended design validates and materializes bytes deterministically before SharePoint upload.
+- [[validation-order]] — held — the recommended design validates and materializes bytes deterministically before SharePoint upload.
 
 ## Candidate learnings
 - `00-inbox/2026-09-09-github-copilot-github-copilot-harness-workflow-agent-nodes-do-n.md`

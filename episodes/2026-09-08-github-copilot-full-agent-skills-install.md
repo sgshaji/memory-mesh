@@ -27,7 +27,7 @@ The publisher validator rejects installer provenance metadata by design, so vali
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] - held: deterministic schema validation ran against pristine source before completion, followed by link and SHA-256 checks.
+- [[validation-order]] - held - deterministic schema validation ran against pristine source before completion, followed by link and SHA-256 checks.
 
 ## Candidate learnings
 - None; the scoped and pinned installation approach was already captured in this session.

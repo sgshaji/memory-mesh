@@ -28,8 +28,8 @@ None. The commit and push completed successfully, and the local working tree was
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — not-applicable: the task involved validating and publishing an archive, not an LLM or schema pipeline.
-- [[projects/copilot-studio-skills]] — not-applicable: the project note did not affect this repository update.
+- [[validation-order]] — not-applicable — the task involved validating and publishing an archive, not an LLM or schema pipeline.
+- [[projects/copilot-studio-skills]] — not-applicable — the project note did not affect this repository update.
 
 ## Candidate learnings
 None.

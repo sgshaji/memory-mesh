@@ -32,7 +32,7 @@ The existing prune status omitted `not_found`, allowing contradictory success. T
 
 ## Knowledge used
 
-- `held` — `validation-order`: semantic protection and missing-target conditions now fail deterministically before deployment.
+- [[validation-order]] — held — semantic protection and missing-target conditions now fail deterministically before deployment.
 
 ## Candidate learnings
 

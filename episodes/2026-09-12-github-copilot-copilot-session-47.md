@@ -42,9 +42,9 @@ untracked files as untracked, then re-committed and pushed.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic checks (temp-clone run of
+- [[validation-order]] — held — deterministic checks (temp-clone run of
   `doctor`, `lint`, and the suite) ran before trusting the workflow text.
-- [[projects/copilot-studio-skills]] — not-applicable: this session was CI and
+- [[projects/copilot-studio-skills]] — not-applicable — this session was CI and
   agent enablement, not document validation.
 
 ## Candidate learnings

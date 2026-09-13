@@ -32,7 +32,7 @@ Earlier-rejecting package checks required two existing mutation-test expectation
 
 ## Knowledge used
 
-- [[validation-order]] - held for deterministic execution validation: invalid formats, stale bindings, malformed Unicode and incomplete packages were rejected before document delivery. Live model ordering was not evaluated.
+- [[validation-order]] - held - for deterministic execution validation: invalid formats, stale bindings, malformed Unicode and incomplete packages were rejected before document delivery. Live model ordering was not evaluated.
 
 ## Candidate learnings
 

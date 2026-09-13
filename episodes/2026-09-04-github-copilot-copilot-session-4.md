@@ -28,8 +28,8 @@ None.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — not-applicable: this task was Git branch synchronization, not validation of an LLM or schema pipeline.
-- [[projects/copilot-studio-skills]] — not-applicable: the project note did not affect the requested Git operation.
+- [[validation-order]] — not-applicable — this task was Git branch synchronization, not validation of an LLM or schema pipeline.
+- [[projects/copilot-studio-skills]] — not-applicable — the project note did not affect the requested Git operation.
 
 ## Candidate learnings
 None.

@@ -32,7 +32,7 @@ Raw semantic diagnostics reintroduced a private-input path through unknown confi
 
 ## Knowledge used
 
-- [[validation-order]] - held for deterministic rejection of invalid and unresolved inputs. Diagnostic privacy must be validated independently of rejection correctness.
+- [[validation-order]] - held - for deterministic rejection of invalid and unresolved inputs. Diagnostic privacy must be validated independently of rejection correctness.
 
 ## Candidate learnings
 

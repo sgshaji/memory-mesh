@@ -32,7 +32,7 @@ The first ZIP rebuild included a Python cache created by tests. Cleaning caches 
 
 ## Knowledge used
 
-- `held` — `validation-order`: invalid source location is rejected deterministically before staging or model mapping.
+- [[validation-order]] — held — invalid source location is rejected deterministically before staging or model mapping.
 
 ## Candidate learnings
 

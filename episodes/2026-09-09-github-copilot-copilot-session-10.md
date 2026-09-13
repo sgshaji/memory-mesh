@@ -28,8 +28,8 @@ The separately configured agent prompt still contains SharePoint-upload wording 
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: the revised workflow retains deterministic template inspection and package verification around the reasoning stage.
-- [[projects/copilot-studio-skills]] — not-applicable: no Copilot Studio validation implementation was changed.
+- [[validation-order]] — held — the revised workflow retains deterministic template inspection and package verification around the reasoning stage.
+- [[projects/copilot-studio-skills]] — not-applicable — no Copilot Studio validation implementation was changed.
 
 ## Candidate learnings
 - `00-inbox/2026-09-09-github-copilot-separate-generated-document-delivery-from-sharep.md`

@@ -40,7 +40,7 @@ lint passed with no findings.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic validation runs before candidate
+- [[validation-order]] — held — deterministic validation runs before candidate
   persistence and rejected malformed structured inputs in tests.
 
 ## Candidate learnings

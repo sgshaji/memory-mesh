@@ -37,9 +37,9 @@ archived original remains unmarked while converted documents are marked generate
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: destination rules were encoded and checked deterministically before
+- [[validation-order]] — held — destination rules were encoded and checked deterministically before
   relying on prose behavior.
-- [[projects/copilot-studio-skills]] — not-applicable: project context was related but did not affect
+- [[projects/copilot-studio-skills]] — not-applicable — project context was related but did not affect
   this separate conversion skill.
 
 ## Candidate learnings

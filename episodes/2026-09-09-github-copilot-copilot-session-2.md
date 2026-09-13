@@ -36,7 +36,7 @@ Existing tests alone did not establish the broader advertised guarantees. Deep W
 
 ## Knowledge used
 
-- [[validation-order]] - held: ordinary invalid and unresolved inputs were deterministically blocked in synthetic tests. A separate Unicode serialization failure showed that validation must also precede hashing of malformed text.
+- [[validation-order]] - held - ordinary invalid and unresolved inputs were deterministically blocked in synthetic tests. A separate Unicode serialization failure showed that validation must also precede hashing of malformed text.
 
 ## Candidate learnings
 

@@ -38,9 +38,9 @@ deployment also lacked a compensating restore path.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic collision and byte-verdict tests passed before the
+- [[validation-order]] — held — deterministic collision and byte-verdict tests passed before the
   procedural changes were considered complete.
-- [[projects/copilot-studio-skills]] — not-applicable: related project context did not affect this
+- [[projects/copilot-studio-skills]] — not-applicable — related project context did not affect this
   separate skill.
 
 ## Candidate learnings

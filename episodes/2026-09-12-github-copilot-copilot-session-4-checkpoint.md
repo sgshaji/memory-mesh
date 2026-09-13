@@ -37,7 +37,7 @@ replace each other. It also risked putting Word package bytes under a `.pdf` ext
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] — held: deterministic destination and archive contracts were tested before
+- [[validation-order]] — held — deterministic destination and archive contracts were tested before
   considering the skill update complete.
 
 ## Candidate learnings

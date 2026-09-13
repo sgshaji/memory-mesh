@@ -36,7 +36,7 @@ Planning alone cannot establish runtime compatibility, approval enforcement, ren
 
 ## Knowledge used
 
-- [[validation-order]] - unclear: used to include deterministic validation before model-assisted mapping in the review criteria; enforcement was not tested.
+- [[validation-order]] - unclear - used to include deterministic validation before model-assisted mapping in the review criteria; enforcement was not tested.
 
 ## Candidate learnings
 

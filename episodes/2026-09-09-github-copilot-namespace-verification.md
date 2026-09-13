@@ -28,7 +28,7 @@ The editor test integration discovered no tests, so the existing unittest runner
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]]: not-applicable — no LLM reasoning stage was involved; checks were deterministic XML parsing and equality.
+- [[validation-order]] — not-applicable — no LLM reasoning stage was involved; checks were deterministic XML parsing and equality.
 
 ## Candidate learnings
 - [[00-inbox/2026-09-09-github-copilot-xml-namespace-verification-must-retain-declarati]] — capture declaration scope independently of expanded-name tree equality; supported by synthetic test outcomes.

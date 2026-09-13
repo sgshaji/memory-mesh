@@ -28,8 +28,8 @@ None. The remote repository already existed, and the local branch pushed success
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — not-applicable: no schema or LLM validation was part of publishing the supplied archive.
-- [[projects/copilot-studio-skills]] — not-applicable: the project note did not affect this repository publication.
+- [[validation-order]] — not-applicable — no schema or LLM validation was part of publishing the supplied archive.
+- [[projects/copilot-studio-skills]] — not-applicable — the project note did not affect this repository publication.
 
 ## Candidate learnings
 None.

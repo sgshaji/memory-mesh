@@ -33,8 +33,8 @@ The initial destination interpretation placed AD output beside PD; screenshots e
 
 ## Knowledge used
 
-- `held` — `validation-order`: deterministic report and deployment validation is executed before success is claimed.
-- `not-applicable` — `projects/copilot-studio-skills`: the project note concerns a different validation-skill build.
+- [[validation-order]] — held — deterministic report and deployment validation is executed before success is claimed.
+- [[projects/copilot-studio-skills]] — not-applicable — the project note concerns a different validation-skill build.
 
 ## Candidate learnings
 

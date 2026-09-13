@@ -36,7 +36,7 @@ regulatory risk, and operational cost when used for business cases.
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] — not-applicable: no payload-processing pipeline was
+- [[validation-order]] — not-applicable — no payload-processing pipeline was
   built or executed; the session assessed published skill sources.
 
 ## Candidate learnings

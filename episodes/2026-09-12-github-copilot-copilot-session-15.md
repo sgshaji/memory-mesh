@@ -33,8 +33,8 @@ The user's current agent-instruction text was not present in the message or work
 
 ## Knowledge used
 
-- `held` — `validation-order`: the extracted package configuration was validated before declaring the ZIP ready.
-- `not-applicable` — `projects/copilot-studio-skills`: the recalled project concerns another validation-skill build.
+- [[validation-order]] — held — the extracted package configuration was validated before declaring the ZIP ready.
+- [[projects/copilot-studio-skills]] — not-applicable — the recalled project concerns another validation-skill build.
 
 ## Candidate learnings
 

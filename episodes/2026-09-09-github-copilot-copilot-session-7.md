@@ -28,8 +28,8 @@ None.
 - [[projects/copilot-studio-skills]]
 
 ## Knowledge used
-- [[validation-order]] — not-applicable: no document payload or LLM generation stage was executed.
-- [[projects/copilot-studio-skills]] — not-applicable: this check concerned a separate agent skill.
+- [[validation-order]] — not-applicable — no document payload or LLM generation stage was executed.
+- [[projects/copilot-studio-skills]] — not-applicable — this check concerned a separate agent skill.
 
 ## Candidate learnings
 - `00-inbox/2026-09-09-github-copilot-pd-ad-conversion-skill-delegates-sharepoint-uplo.md`

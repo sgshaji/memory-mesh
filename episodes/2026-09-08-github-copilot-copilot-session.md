@@ -27,7 +27,7 @@ Copilot-specific behavioral testing is limited, documentation has host-specific 
 - [[validation-order]]
 
 ## Knowledge used
-- [[validation-order]] - held: the recommendation retains deterministic schema, test, lint, and security gates instead of treating skill prose as enforcement.
+- [[validation-order]] - held - the recommendation retains deterministic schema, test, lint, and security gates instead of treating skill prose as enforcement.
 
 ## Candidate learnings
 - Captured a candidate recommending native, scoped, pinned skill installation over wholesale cross-host pack adoption.

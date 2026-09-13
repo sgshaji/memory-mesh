@@ -32,7 +32,7 @@ A custom-threshold report test initially used a stored-byte delta above its conf
 
 ## Knowledge used
 
-- `held` — `validation-order`: configuration validation now runs before planning and model-driven mapping.
+- [[validation-order]] — held — configuration validation now runs before planning and model-driven mapping.
 
 ## Candidate learnings
 
