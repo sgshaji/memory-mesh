@@ -18,7 +18,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .. import config, frontmatter, fsutil, gitutil, packs, redact
-from ..config import Vault
+from ..config import Vault, VaultError
 from ..confidence import (
     FeedbackState,
     decay_due,
@@ -111,6 +111,17 @@ def _run_id(now: datetime | None) -> str:
 
 
 def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: datetime | None = None) -> RunReport:
+    from ..experience import get_mode
+
+    mode = get_mode(vault)
+    if mode == "strict":
+        from .v2 import run_compile as run_v2_compile
+
+        return run_v2_compile(vault, now)
+    if mode in ("shadow", "off"):
+        report = RunReport(_run_id(now))
+        report.warnings.append(f"curator publication is disabled in {mode} mode")
+        return report
     adapter = adapter or NullAdapter()
     report = RunReport(_run_id(now))
     today = _today(now)
@@ -122,6 +133,9 @@ def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: date
     for n in iter_notes(vault, config.INBOX):
         if n.type not in ("candidate", None) or "processed" in n.meta:
             continue
+        if n.meta.get("v2_admission"):
+            report.warnings.append("V2 candidate requires the strict profile; left unchanged")
+            continue
         if "hold_hash" in n.meta:
             if _hold_hash(n) == n.meta.get("hold_hash"):
                 held_items.append(n)  # unchanged since the HOLD — still waiting
@@ -132,7 +146,7 @@ def run_compile(vault: Vault, adapter: ReasoningAdapter | None = None, now: date
         inbox_items.append(n)
     episodes_ready = [
         n for n in iter_notes(vault, config.EPISODES)
-        if n.type == "episode" and n.status == "summarised"
+        if n.type == "episode" and n.status == "summarised" and not n.meta.get("v2_evidence")
     ]
 
     # §2.1 redaction BEFORE anything is read for meaning
@@ -622,6 +636,22 @@ def _write_index(vault: Vault, di: DomainIndex, report: RunReport, today: date) 
 def run_lint(vault: Vault, now: datetime | None = None) -> RunReport:
     report = RunReport(_run_id(now))
     today = _today(now)
+    from ..experience import get_mode
+
+    mode = get_mode(vault)
+    if mode != "legacy":
+        if mode == "strict":
+            from ..learning_flow import validate_note_binding
+
+            for note in knowledge_notes(vault):
+                if note.meta.get("v2_admission"):
+                    try:
+                        validate_note_binding(vault, note)
+                    except VaultError as exc:
+                        report.warnings.append(f"V2 lesson requires review: {exc}")
+        else:
+            report.warnings.append(f"curator publication is disabled in {mode} mode")
+        return report
 
     tally = _tally_from_episodes(vault)
     _feedback_and_confidence_pass(vault, tally, report, today)
@@ -995,6 +1025,9 @@ def _apply_approved_reviews(vault: Vault, report: RunReport, today: date) -> Non
     for path in pending_review_files(vault):
         items = parse_review_file(path)
         for item in items:
+            if item.error:
+                report.warnings.append(f"review action is invalid: {item.error}")
+                continue
             if item.kind in ("MERGE", "SUPERSEDE", "REJECT") and item.approved:
                 try:
                     _apply_review_item(vault, item, report, today)

@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 
 AUTO = ("CREATE", "UPDATE")
-GATED = ("MERGE", "SUPERSEDE", "REJECT")
+GATED = ("MERGE", "SUPERSEDE", "REJECT", "ADMIT")
 
 
 @dataclass

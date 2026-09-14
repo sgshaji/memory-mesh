@@ -21,11 +21,21 @@ __all__ = [
 ]
 
 _PAYLOAD_RE = re.compile(r"<!--\s*mm:payload\s+(\{.*?\})\s*-->", re.S)
-_HEADER_RE = re.compile(r"^##\s+(CREATE|UPDATE|MERGE|SUPERSEDE|REJECT|HOLD|FLAG)\s+(.*)$")
-_APPROVE_RE = re.compile(r"\[[xX]\]\s*approve")
+_HEADER_RE = re.compile(r"^##\s+(CREATE|UPDATE|MERGE|SUPERSEDE|REJECT|ADMIT|HOLD|FLAG)\s+(.*)$")
+_ACTION_LINE_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?(?:\[[ xX]\][ \t]*"
+    r"(?:approve|keep both|keep as candidate|edit|hold|acknowledged)[ \t]*)+$",
+    re.I,
+)
 # Every alternative the spec offers is a decision too: ticking one must retire
 # the item, not leave it to be re-proposed on the next run (curator.md §7).
-_ALTERNATIVE_RE = re.compile(r"\[[xX]\]\s*(keep both|keep as candidate|edit|hold|acknowledged)", re.I)
+_SELECTED_RE = re.compile(r"\[[xX]\]\s*(approve|keep both|keep as candidate|edit|hold|acknowledged)", re.I)
+_CHOICES = {
+    "ADMIT": {"approve", "hold"},
+    "MERGE": {"approve", "keep both", "edit"},
+    "SUPERSEDE": {"approve", "hold"},
+    "REJECT": {"approve", "keep as candidate"},
+}
 
 
 @dataclass
@@ -35,6 +45,7 @@ class ReviewItem:
     approved: bool
     payload: dict = field(default_factory=dict)
     choice: str = ""  # the alternative ticked, when not approved
+    error: str = ""
 
     @property
     def decided(self) -> bool:
@@ -58,7 +69,8 @@ def _render_block(d: Decision) -> str:
         lines.append(f"## {d.kind}  {d.target_ref or d.source_ref}")
     lines.append(f"Why: {d.rationale}")
     if d.claim:
-        lines.append(f"Claim: {d.claim}")
+        lines.append("Claim:")
+        lines.extend("> " + line for line in d.claim.splitlines())
     if d.kind == "MERGE":
         draft = d.payload.get("draft", "")
         if draft:
@@ -72,6 +84,8 @@ def _render_block(d: Decision) -> str:
         lines.append("[ ] approve   [ ] hold")
     elif d.kind == "REJECT":
         lines.append("[ ] approve   [ ] keep as candidate")
+    elif d.kind == "ADMIT":
+        lines.append("[ ] approve   [ ] hold")
     else:
         lines.append("[ ] acknowledged")
     if d.gated:
@@ -110,9 +124,14 @@ def parse_review_file(path: Path) -> list[ReviewItem]:
         if current is None:
             return
         block = "\n".join(block_lines)
-        current.approved = bool(_APPROVE_RE.search(block))
-        alt = _ALTERNATIVE_RE.search(block)
-        current.choice = alt.group(1).lower() if alt and not current.approved else ""
+        actions = "\n".join(line for line in block_lines if _ACTION_LINE_RE.fullmatch(line))
+        selected = [choice.lower() for choice in _SELECTED_RE.findall(actions)]
+        allowed = _CHOICES.get(current.kind, {"acknowledged"})
+        if len(selected) > 1 or any(choice not in allowed for choice in selected):
+            current.error = "select exactly one of the generated review actions"
+        elif selected:
+            current.approved = selected[0] == "approve"
+            current.choice = "" if current.approved else selected[0]
         m = _PAYLOAD_RE.search(block)
         if m:
             try:
@@ -169,7 +188,7 @@ def pending_review_files(vault: Vault) -> list[Path]:
 def is_fully_decided(items: list[ReviewItem]) -> bool:
     """A file is done when every gated item has a ticked box. HOLD/FLAG
     notices need an explicit `[x] acknowledged` before the file retires."""
-    gated = [i for i in items if i.kind in ("MERGE", "SUPERSEDE", "REJECT")]
+    gated = [i for i in items if i.kind in ("MERGE", "SUPERSEDE", "REJECT", "ADMIT")]
     notices = [i for i in items if i.kind in ("HOLD", "FLAG")]
     if not gated and not notices:
         return False

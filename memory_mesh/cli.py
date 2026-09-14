@@ -90,18 +90,22 @@ def cmd_learn(args) -> int:
 
 def cmd_recall(args) -> int:
     vault = _vault(args)
-    res = recall_mod.recall(vault, args.task, tool=args.tool, log=not args.no_log, session_id=args.session)
+    from .experience import get_mode
+    from .host_lifecycle import bound_task
+
+    task_id = getattr(args, "task_id", None)
+    if task_id is None and get_mode(vault) != "legacy":
+        task_id = bound_task(vault, args.session)
+    res = recall_mod.recall(
+        vault, args.task, tool=args.tool, log=not args.no_log,
+        session_id=args.session, task_id=task_id,
+    )
     if args.json:
-        _print(json.dumps({
-            "domains": res.domains,
-            "unclassified": res.unclassified,
-            "notes": [{"ref": n.ref, "domain": n.domain, "section": n.section, "tokens": n.tokens} for n in res.notes],
-            "skipped": res.skipped,
-            "token_total": res.token_total,
-        }, indent=2))
+        _print(json.dumps(res.as_payload(), indent=2))
     else:
         _print(res.context_markdown())
-        _print(f"\n<!-- recall: domains={','.join(res.domains)} notes={len(res.notes)} tokens≈{res.token_total} -->")
+        if res.mode == "legacy":
+            _print(f"\n<!-- recall: domains={','.join(res.domains)} notes={len(res.notes)} tokens≈{res.token_total} -->")
     return 0
 
 
@@ -109,6 +113,12 @@ def cmd_session_start(args) -> int:
     """Print the router and the project note matching the working directory
     (session-lifecycle.md SessionStart). Deterministic; no model."""
     vault = _vault(args)
+    from .experience import get_mode
+
+    mode = get_mode(vault)
+    if mode != "legacy":
+        _print(f"<!-- Memory Mesh {mode}: bind an explicit task for task-bound recall; no generic context injected. -->")
+        return 0
     router_path = vault.path(config.ROUTER)
     if router_path.exists():
         _print(router_path.read_text(encoding="utf-8"))
@@ -147,9 +157,13 @@ def cmd_session_prompt(args) -> int:
     state = recall_mod.load_session_state(vault, sid)
     if state.get("recalled"):
         return 0  # silent: budget already spent
-    res = recall_mod.recall(vault, args.text, tool=args.tool, session_id=sid)
+    from .experience import get_mode
+    from .host_lifecycle import bound_task
+
+    task_id = bound_task(vault, sid) if get_mode(vault) != "legacy" else None
+    res = recall_mod.recall(vault, args.text, tool=args.tool, session_id=sid, task_id=task_id)
     _print(res.context_markdown())
-    if res.unclassified:
+    if res.unclassified and res.mode == "legacy":
         _print("\n<!-- no domain matched; served _general.md; episode will record domains: [unclassified] -->")
     return 0
 
@@ -429,6 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task")
     p.add_argument("--tool", default="cli")
     p.add_argument("--session")
+    p.add_argument("--task-id", help="explicit V2 task context (strict profile)")
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-log", action="store_true")
     p.set_defaults(fn=cmd_recall)
@@ -491,6 +506,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fix", action="store_true")
     p.set_defaults(fn=cmd_doctor)
 
+    from .v2_cli import add_parser as add_v2_parser
+
+    add_v2_parser(sub)
     return ap
 
 

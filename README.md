@@ -25,6 +25,26 @@ canonical knowledge) mines episodes and inbox items into evidence-backed
 claims, derives confidence from feedback, and gates anything destructive
 behind a weekly human review.
 
+## Experimental V2 personal pilot
+
+An opt-in evidence-gated workflow is available alongside V1. It records
+bounded task revisions, runs explicitly requested Python unittest checks,
+stages supported lessons for human review, and recalls only reviewed lessons
+matching an explicit task context. Reports distinguish observed execution
+from operator-reported use and do not claim causal savings.
+
+V1 remains the default. The V2 host grade is **assisted**, not universal
+automatic learning. No paid model service, hosted deployment, or vault
+migration is enabled.
+
+- [Workflow, commands, data contracts, and operational limits](projects/memory-mesh-v2/IMPLEMENTATION.md)
+- Safe, isolated demonstration: `python -m unittest discover -s tests -p "test_v2_cli_workflow.py" -v`
+- Capability report: `python -m memory_mesh.cli v2 capabilities`
+
+The demonstration uses temporary synthetic vaults; it does not promote
+anything into your real knowledge. Use a private, configured vault for live
+curation: curator commands can create local Git commits containing vault data.
+
 ## Five-minute quickstart
 
 Requirements: Python 3.10+, Git. Zero third-party dependencies.

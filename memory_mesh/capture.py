@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, frontmatter, fsutil, redact, router
-from .config import Vault
+from .config import Vault, VaultError
 from .notes import iter_notes
 
 STRUCTURED_KINDS = (
@@ -112,6 +112,10 @@ def learn(
     trust: str = "first-party",
     now: datetime | None = None,
 ) -> CaptureResult:
+    from .experience import get_mode
+
+    if get_mode(vault) != "legacy":
+        raise VaultError("this profile requires reviewed V2 proposals; legacy capture is disabled")
     if not text or not text.strip():
         raise ValueError("nothing to capture")
 
@@ -151,6 +155,10 @@ def learn_structured(
     now: datetime | None = None,
 ) -> CaptureResult:
     """Validate an agent-authored learning before admitting it to the inbox."""
+    from .experience import get_mode
+
+    if get_mode(vault) != "legacy":
+        raise VaultError("this profile requires reviewed V2 proposals; legacy capture is disabled")
     unknown = sorted(set(data) - _STRUCTURED_FIELDS)
     if unknown:
         raise ValueError(f"unknown structured learning fields: {', '.join(unknown)}")

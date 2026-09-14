@@ -31,6 +31,8 @@ def _note_block(vault: Vault, ref: str) -> str | None:
     if path is None:
         return None
     note = load_note(path, vault)
+    if note.meta.get("v2_admission"):
+        return None
     ap = note.meta.get("applies_to")
     lines = [f"### {note.title}"]
     detail = []
@@ -62,6 +64,21 @@ def compile_pack(vault: Vault, domain: str, now: datetime | None = None) -> Path
     dt = (now or datetime.now().astimezone())
     generated = dt.isoformat(timespec="seconds")
     valid_until = (dt + timedelta(days=config.PACK_VALID_DAYS)).isoformat(timespec="seconds")
+    from .experience import get_mode
+
+    if get_mode(vault) != "legacy":
+        metadata = {
+            "type": "context-pack", "domain": domain, "generated_at": generated,
+            "valid_until": valid_until, "source_commit": gitutil.head_commit(vault) or "uncommitted",
+            "source_index": vault.rel(di.path), "token_estimate": 0, "status": "disabled",
+        }
+        body = (
+            "# Generic context pack disabled\n\n"
+            "This vault requires explicit task-bound recall. No knowledge is exported here.\n"
+        )
+        metadata["token_estimate"] = tokens.estimate(frontmatter.compose(metadata, body))
+        out = vault.path(config.CONTEXT_PACKS) / f"{domain}-current.md"
+        return fsutil.curator_write(vault, out, frontmatter.compose(metadata, body))
 
     blocks: list[tuple[str, str, str]] = []  # (section, ref, text)
     for sec in _PRIORITY:
@@ -124,6 +141,8 @@ def compile_all(vault: Vault, now: datetime | None = None) -> list[Path]:
 def freshness(meta: dict, now: datetime | None = None) -> str:
     """Consumer rule (domain-index.md): current | stale | not-authoritative.
     Unparseable metadata is treated as not-authoritative — fail safe."""
+    if meta.get("status") == "disabled":
+        return "not-authoritative"
     dt = now or datetime.now().astimezone()
     try:
         gen = datetime.fromisoformat(str(meta["generated_at"]))

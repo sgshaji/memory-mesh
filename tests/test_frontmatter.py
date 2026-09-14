@@ -71,6 +71,28 @@ class TestFrontmatter(unittest.TestCase):
         meta = fm.parse_yaml_subset(s)
         self.assertEqual(meta["title"], "a: b # c")
 
+    def test_scalar_looking_strings_keep_their_type_and_spelling(self):
+        values = ["123", "00123", "3.13", "+7", "True", "False", "None", "null", "false"]
+        original = {"values": values, "nested": {"identifier": "123", "version": "3.13"}}
+        restored, _ = fm.parse(fm.compose(original, "body"))
+        self.assertEqual(restored, original)
+
+    def test_actual_numbers_and_booleans_keep_their_types(self):
+        original = {"count": 3, "fraction": 3.13, "flag": False, "missing": None}
+        restored, _ = fm.parse(fm.compose(original, "body"))
+        self.assertEqual(restored, original)
+        self.assertIs(type(restored["count"]), int)
+        self.assertIs(type(restored["fraction"]), float)
+
+    def test_escaped_quotes_do_not_turn_string_data_into_comments_or_entries(self):
+        original = {
+            "title": 'A quote " # remains title data',
+            "items": ['one " , still one item', 'two " } still another item'],
+            "nested": {"value": 'a \\" # quoted value'},
+        }
+        restored, _ = fm.parse(fm.compose(original, "body"))
+        self.assertEqual(restored, original)
+
 
 if __name__ == "__main__":
     unittest.main()

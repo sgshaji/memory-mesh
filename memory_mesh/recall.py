@@ -30,6 +30,7 @@ class ServedNote:
     section: str
     tokens: int
     text: str
+    revision: str | None = None
 
 
 @dataclass
@@ -41,14 +42,41 @@ class RecallResult:
     skipped: list[str] = field(default_factory=list)
     missing_indexes: list[str] = field(default_factory=list)  # declared domains without an index file
     token_total: int = 0
+    mode: str = "legacy"
+    abstention: str | None = None
+    brief: str = ""
+    reason_counts: dict[str, int] = field(default_factory=dict)
 
     def context_markdown(self) -> str:
+        if self.mode != "legacy":
+            return self.brief
         parts = []
         for di in self.indexes:
             parts.append(di.path.read_text(encoding="utf-8"))
         for sn in self.notes:
             parts.append(f"\n<!-- recalled: {sn.ref} ({sn.domain}/{sn.section}) -->\n{sn.text}")
         return "\n\n".join(parts)
+
+    def as_payload(self) -> dict:
+        if self.mode == "legacy":
+            return {
+                "domains": self.domains, "unclassified": self.unclassified,
+                "notes": [
+                    {"ref": note.ref, "domain": note.domain, "section": note.section, "tokens": note.tokens}
+                    for note in self.notes
+                ],
+                "skipped": self.skipped, "token_total": self.token_total,
+            }
+        return {
+            "mode": self.mode, "domains": self.domains, "unclassified": self.unclassified,
+            "notes": [
+                {"ref": note.ref, "revision": note.revision, "tokens": note.tokens}
+                for note in self.notes
+            ],
+            "context": self.brief, "context_basis": "caller-declared",
+            "abstention": self.abstention, "reason_counts": self.reason_counts,
+            "token_total": self.token_total,
+        }
 
 
 def recall(
@@ -58,7 +86,20 @@ def recall(
     now: datetime | None = None,
     log: bool = True,
     session_id: str | None = None,
+    task_id: str | None = None,
 ) -> RecallResult:
+    from .experience import get_mode
+
+    mode = get_mode(vault)
+    if mode != "legacy":
+        from .conditional_recall import recall_for_task
+
+        result = recall_for_task(vault, task_text, task_id, mode=mode, now=now)
+        if log:
+            _log_served(vault, tool, result, now)
+        if session_id:
+            _update_session_state(vault, session_id, result)
+        return result
     domains_decl = router.load_domains(vault)
     matched = router.match(task_text, domains_decl, limit=2)
     unclassified = not matched
@@ -105,6 +146,9 @@ def recall(
             result.skipped.append(f"{ref} (unresolved)")
             continue
         note = load_note(path, vault)
+        if note.meta.get("v2_admission"):
+            result.skipped.append(f"{ref} (requires task-bound V2 recall)")
+            continue
         if note.status in _EXCLUDED_STATUSES:
             result.skipped.append(f"{ref} ({note.status})")
             continue

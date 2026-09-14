@@ -48,9 +48,14 @@ def _strip_comment(line: str) -> str:
     """Remove a trailing ` # comment` that is not inside quotes."""
     out = []
     in_q: str | None = None
+    escaped = False
     for i, ch in enumerate(line):
         if in_q:
-            if ch == in_q:
+            if escaped:
+                escaped = False
+            elif ch == "\\" and in_q == '"':
+                escaped = True
+            elif ch == in_q:
                 in_q = None
             out.append(ch)
             continue
@@ -70,10 +75,15 @@ def _strip_comment(line: str) -> str:
 def _split_inline(s: str) -> list[str]:
     """Split a bracket-free-at-top-level comma list, respecting nesting."""
     parts, depth, buf, in_q = [], 0, [], None
+    escaped = False
     for ch in s:
         if in_q:
             buf.append(ch)
-            if ch == in_q:
+            if escaped:
+                escaped = False
+            elif ch == "\\" and in_q == '"':
+                escaped = True
+            elif ch == in_q:
                 in_q = None
             continue
         if ch in "\"'":
@@ -182,8 +192,13 @@ def _dump_scalar(v: Any) -> str:
     if isinstance(v, (int, float)):
         return str(v)
     s = str(v)
-    if s and _BARE_OK.fullmatch(s) and s not in ("true", "false", "null", "~") and not s.endswith(" "):
-        return s
+    if s and _BARE_OK.fullmatch(s) and not s.endswith(" "):
+        try:
+            parsed = _parse_scalar(s)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, str) and parsed == s:
+            return s
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 

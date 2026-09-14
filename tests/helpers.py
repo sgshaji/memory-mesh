@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from memory_mesh.config import Vault  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "vault"
+
+
+def directory_link(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        destination = str(link).replace("'", "''")
+        source = str(target).replace("'", "''")
+        command = f"New-Item -ItemType Junction -Path '{destination}' -Target '{source}' | Out-Null"
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+        )
+        if result.returncode:
+            raise RuntimeError("could not create an isolated junction fixture")
+    else:
+        link.symlink_to(target, target_is_directory=True)
 
 
 def make_vault(tmp: Path | None = None) -> tuple[Vault, tempfile.TemporaryDirectory | None]:
