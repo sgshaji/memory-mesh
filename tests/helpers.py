@@ -53,9 +53,13 @@ def init_git(vault: Vault) -> bool:
             ["add", "-A"],
             ["commit", "-q", "-m", "fixture baseline"],
         ):
-            r = subprocess.run(["git", "-C", str(vault.root), *args], capture_output=True, text=True)
+            r = subprocess.run(
+                ["git", "-C", str(vault.root), *args],
+                capture_output=True, text=True, env=os.environ.copy(),
+            )
             if r.returncode != 0:
-                return False
+                detail = (r.stderr or r.stdout).strip()
+                raise RuntimeError(f"Git fixture {args[0]} failed ({r.returncode}): {detail}")
         return True
-    except (OSError, FileNotFoundError):
+    except FileNotFoundError:
         return False

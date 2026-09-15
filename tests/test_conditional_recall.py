@@ -11,6 +11,7 @@ from memory_mesh import recall, tokens
 from memory_mesh.curator import engine
 from memory_mesh.experience import create_task, revise_task, set_mode
 from memory_mesh.learning_flow import submit_proposal
+from memory_mesh.routing_diagnostics import read_attempts
 
 
 class TestConditionalRecall(unittest.TestCase):
@@ -43,6 +44,13 @@ class TestConditionalRecall(unittest.TestCase):
         self.assertEqual(result.notes, [])
         self.assertEqual(result.abstention, "missing_task_context")
         self.assertNotIn("validation-order", result.context_markdown())
+        self.assertEqual(read_attempts(self.vault), [])
+        logged = recall.recall(self.vault, "repo", session_id="missing-context")
+        attempt = read_attempts(self.vault)[0]
+        self.assertEqual(attempt.attempt_id, logged.attempt_id)
+        self.assertEqual(attempt.abstention, "missing_task_context")
+        self.assertEqual(attempt.usable_count, 0)
+        self.assertFalse(attempt.potential_gap)  # missing permission/context is not a coverage gap
 
     def test_matching_second_project_receives_a_bounded_reviewed_brief(self):
         self.target()
@@ -53,6 +61,14 @@ class TestConditionalRecall(unittest.TestCase):
         self.assertLessEqual(tokens.estimate(result.context_markdown()), 2000)
         self.assertLessEqual(tokens.estimate(json.dumps(result.as_payload(), indent=2)), 2000)
         self.assertLessEqual(result.token_total, 2000)
+        logged = recall.recall(
+            self.vault, "repo runtime", task_id="target", session_id="reviewed-reuse",
+        )
+        attempt = read_attempts(self.vault)[0]
+        self.assertEqual(attempt.note_refs, (self.note.ref,))
+        self.assertEqual(attempt.note_revisions, (logged.notes[0].revision,))
+        self.assertEqual(attempt.mode, "strict")
+        self.assertEqual(attempt.usable_count, 1)
 
     def test_unapproved_project_is_not_a_match(self):
         self.target(project="project-c")
@@ -61,6 +77,16 @@ class TestConditionalRecall(unittest.TestCase):
     def test_wrong_version_is_not_a_match(self):
         self.target(version="3.99.99")
         self.assertEqual(self.recall().notes, [])
+        result = recall.recall(
+            self.vault, "repo runtime", task_id="target", session_id="wrong-version",
+            context={"tool": "python", "version": platform.python_version()},
+        )
+        self.assertEqual(result.notes, [])
+        self.assertIn("runtime_scope", result.reason_counts)
+        attempt = read_attempts(self.vault)[0]
+        self.assertEqual(attempt.usable_count, 0)
+        self.assertGreater(attempt.total_count, 0)
+        self.assertTrue(attempt.potential_gap)
 
     def test_unknown_conditions_are_not_assumed_true(self):
         self.target(facts=[])
@@ -73,6 +99,12 @@ class TestConditionalRecall(unittest.TestCase):
             relation="correction", reason="The previous conclusion remains unresolved.",
         )
         self.assertEqual(self.recall().notes, [])
+        result = recall.recall(
+            self.vault, "repo runtime", task_id="target", session_id="held-admission",
+        )
+        self.assertEqual(result.notes, [])
+        self.assertIn("invalid_or_held_admission", result.reason_counts)
+        self.assertEqual(read_attempts(self.vault)[0].usable_count, 0)
 
     def test_changed_requirements_do_not_falsify_old_scoped_evidence(self):
         self.target()
@@ -97,7 +129,15 @@ class TestConditionalRecall(unittest.TestCase):
 
     def test_off_is_not_a_return_to_legacy_recall(self):
         self.target()
-        set_mode(self.vault, "off")
-        result = self.recall()
-        self.assertEqual(result.notes, [])
-        self.assertEqual(result.abstention, "memory_disabled")
+        for mode, reason in (("off", "memory_disabled"), ("shadow", "shadow_profile")):
+            with self.subTest(mode=mode):
+                set_mode(self.vault, mode)
+                result = self.recall()
+                self.assertEqual(result.notes, [])
+                self.assertEqual(result.abstention, reason)
+                logged = recall.recall(
+                    self.vault, "repo runtime", task_id="target", session_id="disabled-" + mode,
+                )
+                attempt = next(item for item in read_attempts(self.vault) if item.attempt_id == logged.attempt_id)
+                self.assertFalse(attempt.potential_gap)
+                self.assertEqual(attempt.usable_count, 0)

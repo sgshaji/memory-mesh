@@ -14,11 +14,19 @@ Two layers:
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from . import config
 from .config import Vault
+
+_Rule = tuple[str, re.Pattern, str]
+_rule_snapshot: ContextVar[tuple[Path, tuple[_Rule, ...]] | None] = ContextVar(
+    "memory_mesh_redaction_snapshot", default=None,
+)
 
 # Built-in patterns. Order matters: most specific first.
 _BUILTIN: list[tuple[str, re.Pattern, str]] = [
@@ -64,6 +72,9 @@ class Finding:
 
 
 def _load_user_rules(vault: Vault) -> list[tuple[str, re.Pattern, str]]:
+    snapshot = _rule_snapshot.get()
+    if snapshot is not None and snapshot[0] == vault.root:
+        return list(snapshot[1])
     rules: list[tuple[str, re.Pattern, str]] = []
     path = vault.path(config.REDACT_FILE)
     if not path.exists():
@@ -89,6 +100,21 @@ def _load_user_rules(vault: Vault) -> list[tuple[str, re.Pattern, str]]:
         except re.error:
             continue  # a broken user rule must not break capture; lint reports it
     return rules
+
+
+@contextmanager
+def redaction_snapshot(vault: Vault) -> Iterator[None]:
+    """Pin rules for one read operation, never as a process-wide or TTL cache."""
+    current = _rule_snapshot.get()
+    if current is not None and current[0] == vault.root:
+        yield
+        return
+    rules = tuple(_load_user_rules(vault))
+    token = _rule_snapshot.set((vault.root, rules))
+    try:
+        yield
+    finally:
+        _rule_snapshot.reset(token)
 
 
 def lint_user_rules(vault: Vault) -> list[str]:

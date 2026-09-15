@@ -5,6 +5,7 @@ from helpers import make_vault
 
 from memory_mesh import config, packs
 from memory_mesh.frontmatter import compose, parse as fm_parse
+from memory_mesh.notes import load_note
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -88,6 +89,40 @@ class TestPacks(unittest.TestCase):
         self.assertIn("copilot-studio-current.md", names)
         self.assertNotIn("_domains-current.md", names)
         self.assertNotIn("_general-current.md", names)
+
+    def test_applicability_and_inactive_notes_do_not_leak_into_packs(self):
+        path = self.vault.path("knowledge/patterns/validation-order.md")
+        note = load_note(path, self.vault)
+        for applies_to, context, status, included in (
+            ({"to": "2026-08"}, None, "validated", False),
+            ({"version": ">=2"}, {"version": "1"}, "validated", False),
+            ({"version": ">=2"}, None, "validated", True),
+            (None, None, "validated", True),
+            (None, None, "stale", False),
+        ):
+            with self.subTest(applies_to=applies_to, context=context, status=status):
+                note.meta.update(applies_to=applies_to, status=status)
+                path.write_text(compose(note.meta, note.body), encoding="utf-8")
+                pack = packs.compile_pack(self.vault, "copilot-studio", now=NOW, context=context)
+                self.assertEqual(
+                    f"### {note.title}" in pack.read_text(encoding="utf-8"), included,
+                )
+        self.assertFalse(self.vault.path(config.RECALL_ATTEMPTS).exists())
+        self.assertFalse(self.vault.path(config.RECALL_LOG).exists())
+
+    def test_invalid_index_ref_is_an_explicit_pack_error_and_preserves_prior_output(self):
+        output = packs.compile_pack(self.vault, "copilot-studio", now=NOW)
+        before = output.read_bytes()
+        index = self.vault.path("knowledge/_index/copilot-studio.md")
+        index.write_text(
+            index.read_text(encoding="utf-8").replace(
+                "## Read first", "## Read first\n- [[../outside]]",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(packs.PackError, "invalid note reference"):
+            packs.compile_pack(self.vault, "copilot-studio", now=NOW)
+        self.assertEqual(output.read_bytes(), before)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from memory_mesh import capture, config, episodes
 from memory_mesh.curator import engine
 from memory_mesh.curator.review import parse_review_file, pending_review_files
 from memory_mesh.frontmatter import compose, parse as fm_parse
-from memory_mesh.notes import iter_notes, load_note
+from memory_mesh.notes import Note, iter_notes, load_note
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -142,6 +142,102 @@ class TestCuration(unittest.TestCase):
         promoted = [l for l in report.log_lines if l.startswith("PROMOTE")]
         self.assertTrue(promoted, msg="\n".join(report.log_lines))
 
+    def test_single_episode_generic_workaround_is_not_promoted_on_replay(self):
+        episode = _write_episode(
+            self.vault, "2026-09-02-claude-code-generic-fix",
+            "workaround: restart the export worker to clear cached routing state (copilot-studio, 2026-09)",
+            domains="[copilot-studio]",
+        )
+        report = engine.run_compile(self.vault, now=NOW)
+        created = [
+            line for line in report.log_lines
+            if line.startswith("CREATE") and episode.stem in line
+        ]
+        self.assertEqual(len(created), 1, msg="\n".join(report.log_lines))
+        ref = created[0].split()[1]
+        path = self.vault.path(ref + ".md")
+        note = load_note(path, self.vault)
+        self.assertEqual(note.type, "workaround")
+        self.assertEqual(note.observations()[0][0], "fix")
+        self.assertEqual(len(note.meta["evidence"]), 1)
+        self.assertEqual(note.status, "candidate")
+        replay = engine.run_compile(self.vault, now=NOW)
+        self.assertEqual(load_note(path, self.vault).status, "candidate")
+        for run in (report, replay):
+            self.assertFalse(any(
+                line.startswith("PROMOTE") and line.split()[1] == ref for line in run.log_lines
+            ))
+        self.assertNotIn(
+            path.stem, self.vault.path("knowledge/_index/copilot-studio.md").read_text(encoding="utf-8"),
+        )
+
+    def test_single_episode_fix_with_concrete_test_evidence_still_promotes(self):
+        episode = _write_episode(
+            self.vault, "2026-09-02-claude-code-tested-fix",
+            "workaround: ran `python -m unittest test_schema -q`; all 8 tests passed (copilot-studio, 2026-09)",
+            domains="[copilot-studio]",
+        )
+        report = engine.run_compile(self.vault, now=NOW)
+        created = [
+            line for line in report.log_lines
+            if line.startswith("CREATE") and episode.stem in line
+        ]
+        self.assertEqual(len(created), 1, msg="\n".join(report.log_lines))
+        ref = created[0].split()[1]
+        note = load_note(self.vault.path(ref + ".md"), self.vault)
+        self.assertEqual(note.type, "workaround")
+        self.assertEqual(len(note.meta["evidence"]), 1)
+        self.assertEqual(note.status, "validated")
+        self.assertTrue(any(
+            line.startswith("PROMOTE") and line.split()[1] == ref for line in report.log_lines
+        ))
+
+    def test_generic_prose_and_code_formatting_are_not_reproducible_evidence(self):
+        for category, fact in (
+            ("fix", "Retry publishing after restarting the application."),
+            ("workaround", "Use the alternate configuration."),
+            ("error", "An error occurred."),
+            ("command", "Run the right command."),
+            ("repro", "Reproduce the problem and fix it."),
+            ("test", "All tests passed."),
+            ("evidence", "The workaround was verified."),
+            ("verified-observation", "The fix was observed to work."),
+            ("behaviour", "The `required` field avoids the issue."),
+            ("fix", "Update `settings.json` before retrying."),
+            ("fix", "`optional schema properties` failed to help."),
+            ("fix", "Unbalanced `python -m unittest passed."),
+            ("fix", "`` marks this as code."),
+            ("evidence", "[[projects/missing-result]] recorded the expected output."),
+        ):
+            note = Note(
+                self.vault.path("knowledge/patterns/evidence-gate.md"), {},
+                f"## Observations\n- [{category}] {fact}\n", self.vault,
+            )
+            with self.subTest(category=category, fact=fact):
+                self.assertFalse(engine._has_reproducible_evidence(note))
+
+    def test_explicit_reproduction_details_qualify_as_reported_v1_evidence(self):
+        artifact = self.vault.path("projects/repro-result.md")
+        artifact.write_text(
+            "# Recorded schema test\nCommand: python -m unittest test_schema -q\nExpected: 0\nObserved: 0\n",
+            encoding="utf-8",
+        )
+        for category, fact in (
+            ("command", "`python -m unittest test_schema -q`"),
+            ("repro", "`pac solution export --name sample` reproduces exit code 1."),
+            ("test", "`python -m unittest test_schema -q` passed all 8 tests."),
+            ("execution", "Command `python -m unittest test_schema -q` exited 0."),
+            ("evidence", "[[projects/repro-result]] records expected 0 and observed 0."),
+            ("artifact", "[[projects/repro-result.md|Schema output]] records the observed result."),
+            ("verified-observation", "Running `pac solution export` returned exit code 1."),
+        ):
+            note = Note(
+                self.vault.path("knowledge/patterns/evidence-gate.md"), {},
+                f"## Observations\n- [{category}] {fact}\n", self.vault,
+            )
+            with self.subTest(category=category, fact=fact):
+                self.assertTrue(engine._has_reproducible_evidence(note))
+
     def test_third_party_never_promotes(self):
         p = self.vault.path("knowledge/patterns/rumour.md")
         p.write_text(compose(
@@ -222,8 +318,9 @@ class TestCuration(unittest.TestCase):
                            retrieved="- [[validation-order]]",
                            used="- [[validation-order]] — held — worked",
                            captured=f"2026-09-0{i - 2}T10:00:00+05:30")
-        engine.run_compile(self.vault, now=NOW)  # mines them
-        report = engine.run_lint(self.vault, now=NOW)
+        observed_after_all_reports = NOW.replace(day=6)
+        engine.run_compile(self.vault, now=observed_after_all_reports)
+        report = engine.run_lint(self.vault, now=observed_after_all_reports)
         grad = self.vault.path(config.GRADUATION_FILE)
         self.assertTrue(grad.exists(), msg="\n".join(report.log_lines))
         self.assertIn("validation-order", grad.read_text(encoding="utf-8"))

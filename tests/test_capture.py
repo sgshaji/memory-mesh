@@ -1,11 +1,16 @@
 import json
 import unittest
 from datetime import datetime, timezone
+from typing import Any
+from unittest.mock import patch
 
 from helpers import make_vault
 
-from memory_mesh import capture, cli, config
+from memory_mesh import capture, cli, config, frontmatter
+from memory_mesh.experience import set_mode
 from memory_mesh.frontmatter import parse as fm_parse
+from memory_mesh.notes import load_note
+from memory_mesh.schema import validate_note
 
 
 class TestCapture(unittest.TestCase):
@@ -152,6 +157,204 @@ class TestCapture(unittest.TestCase):
         first = capture.learn(self.vault, "the same exact insight", source_tool="x")
         meta, _ = fm_parse(first.path.read_text(encoding="utf-8"))
         self.assertEqual(meta["content_hash"], capture._content_hash("the same exact insight"))
+
+    def test_signal_and_episode_link_are_optional_capture_metadata(self):
+        result = capture.learn(
+            self.vault, "A linked observation", signal="high",
+            source_episode="episodes/linked-session.md",
+        )
+        note = load_note(result.path, self.vault)
+        self.assertEqual(note.meta["signal"], "high")
+        self.assertEqual(note.meta["source_episode"], "episodes/linked-session")
+        self.assertEqual(note.meta["content_hash"], capture._content_hash("A linked observation"))
+        self.assertFalse(result.updated)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(
+            [issue.message for issue in validate_note(note, self.vault) if issue.severity == "error"], [],
+        )
+        for field in ("status", "confidence", "feedback", "last_verified"):
+            self.assertNotIn(field, note.meta)
+
+    def test_default_capture_retains_legacy_optional_field_omissions(self):
+        result = capture.learn(self.vault, "Legacy metadata remains small")
+        meta, _ = fm_parse(result.path.read_text(encoding="utf-8"))
+        self.assertNotIn("signal", meta)
+        self.assertNotIn("source_episode", meta)
+
+    def test_structured_capture_metadata_does_not_change_identity(self):
+        data = {
+            "title": "A verified procedure",
+            "observations": [
+                {"kind": "procedure", "text": "Run deterministic checks."},
+                {"kind": "evidence", "text": "The focused tests passed."},
+            ],
+        }
+        first = capture.learn_structured(self.vault, data)
+        before, body = fm_parse(first.path.read_text(encoding="utf-8"))
+        duplicate = capture.learn_structured(
+            self.vault, data, signal="high", source_episode="episodes/structured-session",
+        )
+        after, updated_body = fm_parse(duplicate.path.read_text(encoding="utf-8"))
+        self.assertFalse(duplicate.created)
+        self.assertTrue(duplicate.updated)
+        self.assertEqual(first.path, duplicate.path)
+        self.assertEqual(after["content_hash"], before["content_hash"])
+        self.assertEqual(updated_body, body)
+        self.assertEqual(after["signal"], "high")
+        self.assertEqual(after["source_episode"], "episodes/structured-session")
+
+    def test_high_duplicate_upgrades_attention_without_changing_claim(self):
+        first = capture.learn(
+            self.vault, "Keep this claim stable", signal="low",
+            trust="third-party", now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+        before, body = fm_parse(first.path.read_text(encoding="utf-8"))
+        duplicate = capture.learn(
+            self.vault, "KEEP this claim stable", signal="high",
+            trust="first-party", now=datetime(2026, 9, 14, tzinfo=timezone.utc),
+        )
+        after, updated_body = fm_parse(duplicate.path.read_text(encoding="utf-8"))
+        self.assertEqual(duplicate.path, first.path)
+        self.assertFalse(duplicate.created)
+        self.assertTrue(duplicate.updated)
+        self.assertEqual(after, {**before, "signal": "high"})
+        self.assertEqual(updated_body, body)
+
+    def test_default_duplicate_never_overrides_low_and_replayed_high_is_noop(self):
+        first = capture.learn(self.vault, "An intentionally low priority", signal="low")
+        before = first.path.read_bytes()
+        normal = capture.learn(self.vault, "An intentionally low priority")
+        self.assertFalse(normal.updated)
+        self.assertEqual(first.path.read_bytes(), before)
+        capture.learn(self.vault, "An intentionally low priority", signal="high")
+        elevated = first.path.read_bytes()
+        with patch.object(capture.fsutil, "agent_write", wraps=capture.fsutil.agent_write) as write:
+            for signal in ("normal", "low", "high"):
+                duplicate = capture.learn(self.vault, "An intentionally low priority", signal=signal)
+                self.assertFalse(duplicate.updated)
+        write.assert_not_called()
+        self.assertEqual(first.path.read_bytes(), elevated)
+
+    def test_duplicate_keeps_original_source_episode_and_reports_conflict(self):
+        first = capture.learn(self.vault, "A repeated observation", source_episode="episodes/first")
+        duplicate = capture.learn(
+            self.vault, "A repeated observation", signal="high", source_episode="episodes/second",
+        )
+        meta, _ = fm_parse(first.path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["source_episode"], "episodes/first")
+        self.assertEqual(meta["signal"], "high")
+        self.assertTrue(duplicate.updated)
+        self.assertTrue(any("Candidate learnings" in warning for warning in duplicate.warnings))
+
+    def test_high_duplicate_diagnoses_malformed_existing_signal_without_repairing_it(self):
+        first = capture.learn(self.vault, "Malformed attention metadata")
+        meta, body = fm_parse(first.path.read_text(encoding="utf-8"))
+        meta["signal"] = ["high"]
+        first.path.write_text(frontmatter.compose(meta, body), encoding="utf-8")
+        before = first.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "signal"):
+            capture.learn(self.vault, "Malformed attention metadata", signal="high")
+        self.assertEqual(first.path.read_bytes(), before)
+
+    def test_processed_duplicate_is_not_upgraded(self):
+        first = capture.learn(self.vault, "Already reviewed")
+        meta, body = fm_parse(first.path.read_text(encoding="utf-8"))
+        meta["processed"] = "2026-09-10"
+        first.path.write_text(frontmatter.compose(meta, body), encoding="utf-8")
+        before = first.path.read_bytes()
+        next_capture = capture.learn(self.vault, "Already reviewed", signal="high")
+        self.assertTrue(next_capture.created)
+        self.assertNotEqual(first.path, next_capture.path)
+        self.assertEqual(first.path.read_bytes(), before)
+
+    def test_duplicate_changed_after_lookup_is_not_overwritten(self):
+        first = capture.learn(self.vault, "A concurrently reviewed candidate")
+        meta, body = fm_parse(first.path.read_text(encoding="utf-8"))
+        for changed in ({**meta, "processed": "2026-09-14"}, {**meta, "type": "gap"}, {}):
+            first.path.write_text(frontmatter.compose(changed, body), encoding="utf-8")
+            before = first.path.read_bytes()
+            with self.subTest(changed=changed), patch.object(capture, "_existing_candidate", return_value=first.path):
+                with self.assertRaises(config.VaultError):
+                    capture.learn(self.vault, "A concurrently reviewed candidate", signal="high")
+            self.assertEqual(first.path.read_bytes(), before)
+
+    def test_duplicate_upgrade_still_enforces_agent_write_boundary(self):
+        first = capture.learn(self.vault, "Boundary-protected metadata")
+        canonical = self.vault.path("knowledge/patterns/candidate-shaped-note.md")
+        canonical.write_bytes(first.path.read_bytes())
+        before = canonical.read_bytes()
+        with patch.object(capture, "_existing_candidate", return_value=canonical):
+            with self.assertRaises(capture.fsutil.WriteBoundaryError):
+                capture.learn(self.vault, "Boundary-protected metadata", signal="high")
+        self.assertEqual(canonical.read_bytes(), before)
+
+    def test_gap_hash_does_not_deduplicate_a_factual_observation(self):
+        first = capture.learn(self.vault, "The same words describe a need")
+        meta, _ = fm_parse(first.path.read_text(encoding="utf-8"))
+        meta.update(type="gap", need="The same words describe a need")
+        first.path.write_text(frontmatter.compose(meta, ""), encoding="utf-8")
+        second = capture.learn(self.vault, "The same words describe a need", signal="high")
+        self.assertTrue(second.created)
+        self.assertNotEqual(first.path, second.path)
+        self.assertEqual(load_note(first.path, self.vault).type, "gap")
+
+    def test_signal_validation_is_explicit_and_writes_nothing(self):
+        before = sorted(self.vault.path(config.INBOX).glob("*.md"))
+        invalid_signals: tuple[Any, ...] = ("urgent", "", "HIGH", None, ["high"], True)
+        for signal in invalid_signals:
+            with self.subTest(signal=signal), self.assertRaisesRegex(ValueError, "signal"):
+                capture.learn(self.vault, "Invalid signal", signal=signal)
+        self.assertEqual(before, sorted(self.vault.path(config.INBOX).glob("*.md")))
+
+    def test_episode_link_redaction_precedes_new_and_duplicate_writes(self):
+        for duplicate in (False, True):
+            observation = f"Redact episode metadata {duplicate}"
+            if duplicate:
+                capture.learn(self.vault, observation)
+            result = capture.learn(
+                self.vault, observation, source_episode="episodes/Contoso-investigation",
+            )
+            text = result.path.read_text(encoding="utf-8")
+            meta, _ = fm_parse(text)
+            self.assertNotIn("Contoso", text)
+            self.assertIn("[customer]", meta["source_episode"])
+            self.assertEqual(meta["sensitivity"], "redacted")
+            self.assertTrue(result.redacted)
+
+    def test_episode_link_validation_rejects_nonlocal_or_malformed_references(self):
+        invalid_references: tuple[Any, ...] = (
+            "", "   ", 42, ["episodes/a"], "../escape", "episodes/../escape",
+            "knowledge/patterns/not-an-episode", "/episodes/absolute",
+            "C:\\private\\episode.md", "https://example.com/episode",
+            "episodes/a\nsignal: high", "episodes/a\x00", "episodes/a\u2028b",
+            "episodes/a\u0085b",
+        )
+        for source_episode in invalid_references:
+            with self.subTest(source_episode=source_episode), self.assertRaisesRegex(ValueError, "source_episode"):
+                capture.learn(self.vault, "Invalid linkage", source_episode=source_episode)
+
+    def test_episode_link_accepts_windows_paths_and_legacy_bare_slugs(self):
+        for reference in ("episodes\\local.md", "local", "[[episodes/local.md|Session]]"):
+            with self.subTest(reference=reference):
+                result = capture.learn(self.vault, f"Reference spelling {reference}", source_episode=reference)
+                meta, _ = fm_parse(result.path.read_text(encoding="utf-8"))
+                self.assertEqual(meta["source_episode"], "episodes/local")
+
+    def test_attention_metadata_cannot_bypass_v2_capture_boundaries(self):
+        data = {
+            "title": "Unreviewed procedure",
+            "observations": [
+                {"kind": "procedure", "text": "Try a procedure."},
+                {"kind": "outcome", "text": "An agent reports success."},
+            ],
+        }
+        for mode in ("strict", "shadow", "off"):
+            set_mode(self.vault, mode)
+            with self.subTest(mode=mode):
+                with self.assertRaises(config.VaultError):
+                    capture.learn(self.vault, "Unreviewed", signal="high", source_episode="episodes/source")
+                with self.assertRaises(config.VaultError):
+                    capture.learn_structured(self.vault, data, signal="high", source_episode="episodes/source")
 
     def test_structured_cli_applies_metadata_flags(self):
         payload = json.dumps({

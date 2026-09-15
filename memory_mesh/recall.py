@@ -11,11 +11,12 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Mapping
 
-from . import config, fsutil, router, tokens
+from . import config, fsutil, redact, router, tokens
 from .config import Vault
-from .indexes import LINK_SECTIONS, DomainIndex, load_index
-from .notes import load_note, resolve_ref
+from .indexes import LINK_SECTIONS, DomainIndex, load_index, render_index
+from .notes import NoteReferenceError, load_note, resolve_ref
 
 # Priority of index sections when the note budget forces a cut.
 _SECTION_PRIORITY = ("Read first", "Known failures", "Current workarounds", "Active project")
@@ -46,13 +47,25 @@ class RecallResult:
     abstention: str | None = None
     brief: str = ""
     reason_counts: dict[str, int] = field(default_factory=dict)
+    candidate_count: int = 0
+    attempt_id: str | None = None
+    task_revision: int | None = None
 
     def context_markdown(self) -> str:
         if self.mode != "legacy":
             return self.brief
-        parts = []
+        parts = ["<!-- Read-only recall index view: only links served below are included. Stored indexes are unchanged. -->"]
+        served = {(note.domain, note.ref) for note in self.notes}
         for di in self.indexes:
-            parts.append(di.path.read_text(encoding="utf-8"))
+            view = DomainIndex(
+                domain=di.domain, path=di.path, meta=dict(di.meta), title=di.title,
+                sections={
+                    name: [entry for entry in entries if (di.domain, entry.ref) in served]
+                    for name, entries in di.sections.items()
+                },
+            )
+            updated = di.meta.get("updated")
+            parts.append(render_index(view, updated if isinstance(updated, str) else "unknown"))
         for sn in self.notes:
             parts.append(f"\n<!-- recalled: {sn.ref} ({sn.domain}/{sn.section}) -->\n{sn.text}")
         return "\n\n".join(parts)
@@ -79,6 +92,32 @@ class RecallResult:
         }
 
 
+def resolve_index_ref(vault: Vault, ref: str) -> Path | None:
+    """Resolve curated index links without recursive discovery.
+
+    Legacy bare slugs address direct children of the fixed V1 lookup tiers.
+    Nested notes require qualified references. All validation/containment is
+    delegated to the common resolver through exact qualified lookups.
+    """
+    if not isinstance(ref, str):
+        raise NoteReferenceError("index reference must be a string")
+    ref = ref.strip().replace("\\", "/")
+    if "/" in ref:
+        return resolve_ref(vault, ref)
+    matches: set[Path] = set()
+    for folder in (*config.KNOWLEDGE_FOLDERS, config.PROJECTS, config.EPISODES, config.SKILLS):
+        path = resolve_ref(vault, f"{folder}/{ref}")
+        if path is not None:
+            matches.add(path)
+    slug = ref[:-3] if ref.lower().endswith(".md") else ref
+    skill = resolve_ref(vault, f"{config.SKILLS}/{slug}/SKILL.md")
+    if skill is not None:
+        matches.add(skill)
+    if len(matches) > 1:
+        raise NoteReferenceError("ambiguous index reference; use a full vault-relative path")
+    return next(iter(matches), None)
+
+
 def recall(
     vault: Vault,
     task_text: str,
@@ -87,7 +126,17 @@ def recall(
     log: bool = True,
     session_id: str | None = None,
     task_id: str | None = None,
+    *,
+    context: Mapping[str, str] | None = None,
+    attempt_id: str | None = None,
 ) -> RecallResult:
+    """Recall bounded context. ``log=False`` suppresses *all* telemetry/state.
+
+    Identical session/task/result retries share an immutable attempt and TSV
+    rows. Supply a fresh explicit ``attempt_id`` for an independent trial.
+    Strict recall derives applicability context from its task, not overrides.
+    """
+    from .applicability import match_applicability
     from .experience import get_mode
 
     mode = get_mode(vault)
@@ -96,9 +145,7 @@ def recall(
 
         result = recall_for_task(vault, task_text, task_id, mode=mode, now=now)
         if log:
-            _log_served(vault, tool, result, now)
-        if session_id:
-            _update_session_state(vault, session_id, result)
+            _record_recall(vault, task_text, tool, result, now, session_id, task_id, attempt_id)
         return result
     domains_decl = router.load_domains(vault)
     matched = router.match(task_text, domains_decl, limit=2)
@@ -133,24 +180,36 @@ def recall(
             for entry in di.sections.get(sec, []):
                 ordered.append((di.domain, sec, entry.ref))
 
+    result.candidate_count = len({ref for _, _, ref in ordered})
     seen: set[str] = set()
     for domain, sec, ref in ordered:
         if len(result.notes) >= config.RECALL_MAX_NOTES:
             result.skipped.append(f"{ref} (note budget)")
             continue
-        key = ref.split("/")[-1]
-        if key in seen:
+        try:
+            path = resolve_index_ref(vault, ref)
+        except NoteReferenceError:
+            result.skipped.append(f"{ref} (invalid reference)")
             continue
-        path = resolve_ref(vault, ref)
         if path is None:
             result.skipped.append(f"{ref} (unresolved)")
             continue
+        key = vault.rel(path)
+        if key in seen:
+            continue
         note = load_note(path, vault)
+        if note.parse_error:
+            result.skipped.append(f"{ref} (malformed note)")
+            continue
         if note.meta.get("v2_admission"):
             result.skipped.append(f"{ref} (requires task-bound V2 recall)")
             continue
         if note.status in _EXCLUDED_STATUSES:
             result.skipped.append(f"{ref} ({note.status})")
+            continue
+        applicability = match_applicability(note.meta.get("applies_to"), context=context, now=now)
+        if applicability.state == "mismatch":
+            result.skipped.append(f"{ref} (inapplicable)")
             continue
         text = path.read_text(encoding="utf-8")
         t = tokens.estimate(text)
@@ -162,17 +221,34 @@ def recall(
         result.token_total += t
 
     if log:
-        _log_served(vault, tool, result, now)
+        _record_recall(vault, task_text, tool, result, now, session_id, task_id, attempt_id)
+    return result
+
+
+def _record_recall(
+    vault: Vault, task_text: str, tool: str, result: RecallResult, now: datetime | None,
+    session_id: str | None, task_id: str | None, attempt_id: str | None,
+) -> None:
+    from .outcome_types import parse_timestamp
+    from .routing_diagnostics import record_attempt
+
+    attempt, created = record_attempt(
+        vault, task_text, result, tool=tool, session_id=session_id,
+        task_id=task_id, attempt_id=attempt_id, now=now,
+    )
+    result.attempt_id = attempt.attempt_id
+    if created:
+        _log_served(vault, attempt.tool, result, parse_timestamp(attempt.timestamp))
     if session_id:
         _update_session_state(vault, session_id, result)
-    return result
 
 
 def _log_served(vault: Vault, tool: str, result: RecallResult, now: datetime | None) -> None:
     stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
     log_path = vault.path(config.RECALL_LOG)
+    clean_tool = " ".join(redact.redact(tool, vault)[0].split())
     for sn in result.notes:
-        fsutil.append_line(log_path, f"{stamp}\t{tool}\t{sn.domain}\t{sn.ref.split('/')[-1]}")
+        fsutil.append_line(log_path, f"{stamp}\t{clean_tool}\t{sn.domain}\t{sn.path.stem}")
 
 
 # ---------------------------------------------------------- session state
@@ -189,7 +265,8 @@ def load_session_state(vault: Vault, session_id: str) -> dict:
     p = session_state_path(vault, session_id)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            state = json.loads(p.read_text(encoding="utf-8"))
+            return state if isinstance(state, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
@@ -220,4 +297,9 @@ def _update_session_state(vault: Vault, session_id: str, result: RecallResult) -
         if d not in state["domains"]:
             state["domains"].append(d)
     state["recalled"] = True
+    if result.attempt_id:
+        state.setdefault("recall_attempts", [])
+        if result.attempt_id not in state["recall_attempts"]:
+            state["recall_attempts"].append(result.attempt_id)
+        state["last_recall_attempt"] = result.attempt_id
     save_session_state(vault, session_id, state)

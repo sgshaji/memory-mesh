@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from helpers import make_vault
 
@@ -86,10 +87,39 @@ class TestRecall(unittest.TestCase):
         self.assertTrue(log.exists())
 
     def test_session_state_accumulates_retrieved(self):
-        recall.recall(self.vault, "copilot studio work", session_id="s1", log=False)
+        recall.recall(self.vault, "copilot studio work", session_id="s1")
         state = recall.load_session_state(self.vault, "s1")
         self.assertTrue(state.get("recalled"))
         self.assertTrue(any("validation-order" in r for r in state.get("retrieved", [])))
+        self.assertEqual(len(state["recall_attempts"]), 1)
+
+    def test_applicability_excludes_expired_or_incompatible_but_not_unknown(self):
+        path = self.vault.path("knowledge/patterns/validation-order.md")
+        note = load_note(path, self.vault)
+        now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+        for applicability, context, included in (
+            ({"to": "2026-08"}, None, False),
+            ({"to": "2026-09"}, None, True),
+            ({"product": "studio", "version": ">=2, <3"}, {"product": "studio", "version": "1"}, False),
+            ({"version": ">=2, <3"}, None, True),
+            (None, {"version": "1"}, True),
+        ):
+            with self.subTest(applicability=applicability, context=context):
+                note.meta["applies_to"] = applicability
+                path.write_text(compose(note.meta, note.body), encoding="utf-8")
+                result = recall.recall(
+                    self.vault, "copilot studio", context=context, now=now, log=False,
+                )
+                self.assertEqual(any(item.path == path for item in result.notes), included)
+                rendered_indexes = result.context_markdown().split("<!-- recalled:", 1)[0]
+                self.assertEqual("[[validation-order]]" in rendered_indexes, included)
+
+    def test_rendered_recall_uses_its_in_memory_index_snapshot(self):
+        result = recall.recall(self.vault, "copilot studio", log=False)
+        before = result.context_markdown()
+        index = self.vault.path("knowledge/_index/copilot-studio.md")
+        index.write_text(index.read_text(encoding="utf-8") + "\nUNREAD LATER INDEX CONTENT\n", encoding="utf-8")
+        self.assertEqual(result.context_markdown(), before)
 
     def test_recall_token_budget_skip(self):
         # oversized notes force the 2,000-token ceiling before the 6-note cap

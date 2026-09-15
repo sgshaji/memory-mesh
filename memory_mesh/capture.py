@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from . import config, frontmatter, fsutil, redact, router
 from .config import Vault, VaultError
-from .notes import iter_notes
+from .notes import WIKILINK_RE, iter_notes, load_note
 
 STRUCTURED_KINDS = (
     "scenario",
@@ -40,6 +40,8 @@ class CaptureResult:
     created: bool  # False when an identical candidate already existed
     redacted: bool
     findings: list[redact.Finding]
+    updated: bool = False  # Existing candidate's attention/linkage metadata changed.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _content_hash(text: str) -> str:
@@ -56,9 +58,86 @@ def _now_iso(now: datetime | None) -> str:
 
 def _existing_candidate(vault: Vault, content_hash: str) -> Path | None:
     for note in iter_notes(vault, config.INBOX):
-        if note.meta.get("content_hash") == content_hash and "processed" not in note.meta:
+        if note.type != "gap" and note.meta.get("content_hash") == content_hash and "processed" not in note.meta:
             return note.path
     return None
+
+
+def _normalise_episode_ref(value: str) -> str:
+    if not value.strip() or len(value.splitlines()) != 1 or any(ord(char) < 32 for char in value):
+        raise ValueError("source_episode must be a non-empty single line episode reference")
+    ref = value.strip()
+    if match := WIKILINK_RE.fullmatch(ref):
+        ref = match.group(1).strip()
+    elif ref.startswith("[["):
+        raise ValueError("source_episode contains a malformed episode link")
+    ref = ref.replace("\\", "/")
+    if ref.endswith(".md"):
+        ref = ref[:-3]
+    if ":" in ref or any(part in ("", ".", "..") for part in ref.split("/")):
+        raise ValueError("source_episode must be a local reference under episodes/")
+    if "/" not in ref:
+        ref = f"{config.EPISODES}/{ref}"
+    if not ref.startswith(config.EPISODES + "/"):
+        raise ValueError("source_episode must be a local reference under episodes/")
+    return ref
+
+
+def _capture_options(
+    vault: Vault, signal: str, source_episode: str | None,
+) -> tuple[str | None, list[redact.Finding]]:
+    if not isinstance(signal, str) or signal not in ("high", "normal", "low"):
+        raise ValueError("signal must be high, normal or low")
+    if source_episode is None:
+        return None, []
+    if not isinstance(source_episode, str):
+        raise ValueError("source_episode must be an episode reference")
+    clean, findings = redact.redact(_normalise_episode_ref(source_episode), vault)
+    reference = _normalise_episode_ref(clean)
+    path = fsutil.checked_regular_path(vault, vault.path(reference + ".md"))
+    if path.exists():
+        note = load_note(path, vault)
+        if note.parse_error or note.type != "episode":
+            raise ValueError("source_episode must reference an episode, not another record type")
+    return reference, findings
+
+
+def _update_duplicate(
+    vault: Vault, path: Path, signal: str, source_episode: str | None,
+    findings: list[redact.Finding],
+) -> CaptureResult:
+    result = CaptureResult(path, created=False, redacted=bool(findings), findings=findings)
+    if signal != "high" and source_episode is None:
+        return result
+    note = load_note(path, vault)
+    if note.parse_error or note.type != "candidate" or "processed" in note.meta:
+        raise VaultError("duplicate candidate changed after lookup; retry capture before updating metadata")
+    meta = dict(note.meta)
+    if signal == "high":
+        old_signal = meta.get("signal", "normal")
+        if not isinstance(old_signal, str) or old_signal not in ("high", "normal", "low"):
+            raise ValueError("existing candidate has an invalid signal; repair it before upgrading attention")
+        meta["signal"] = "high"
+    if source_episode is not None:
+        original_source = meta.get("source_episode")
+        if original_source is None:
+            meta["source_episode"] = source_episode
+            if findings:
+                meta["sensitivity"] = "redacted"
+        else:
+            try:
+                same_source = isinstance(original_source, str) and _normalise_episode_ref(original_source) == source_episode
+            except ValueError:
+                same_source = False
+            if not same_source:
+                result.warnings.append(
+                    "duplicate retains its original source_episode; link this candidate from "
+                    "the additional episode's Candidate learnings section to record recurrence"
+                )
+    if meta != note.meta:
+        fsutil.agent_write(vault, path, frontmatter.compose(meta, note.body))
+        result.updated = True
+    return result
 
 
 def _write_candidate(
@@ -74,12 +153,14 @@ def _write_candidate(
     findings: list[redact.Finding],
     now: datetime | None,
     hash_input: str | None = None,
+    signal: str = "normal",
+    source_episode: str | None = None,
 ) -> CaptureResult:
     semantic_text = hash_input or "\n".join(f"{kind}: {text}" for kind, text in observations)
     chash = _content_hash(semantic_text)
     existing = _existing_candidate(vault, chash)
     if existing is not None:
-        return CaptureResult(existing, created=False, redacted=bool(findings), findings=findings)
+        return _update_duplicate(vault, existing, signal, source_episode, findings)
 
     dt = now or datetime.now().astimezone()
     date = dt.strftime("%Y-%m-%d")
@@ -98,6 +179,10 @@ def _write_candidate(
     }
     if project:
         meta["project"] = project
+    if signal != "normal":
+        meta["signal"] = signal
+    if source_episode is not None:
+        meta["source_episode"] = source_episode
     body = "## Observations\n" + "\n".join(f"- [{kind}] {text}" for kind, text in observations)
     written = fsutil.agent_write(vault, path, frontmatter.compose(meta, body))
     return CaptureResult(written, created=True, redacted=bool(findings), findings=findings)
@@ -111,16 +196,29 @@ def learn(
     project: str | None = None,
     trust: str = "first-party",
     now: datetime | None = None,
+    *,
+    signal: str = "normal",
+    source_episode: str | None = None,
 ) -> CaptureResult:
+    """Capture an observation; signal changes attention, never truth or trust.
+
+    Duplicate captures keep their identity and original content. Only explicit
+    high upgrades their signal; normal/low never overwrite existing attention.
+    The first source episode is retained. Additional episodes should link the
+    candidate in Candidate learnings; conflicting source requests warn.
+    Episode references may be vault-relative, bare slugs or wikilinks.
+    """
     from .experience import get_mode
 
     if get_mode(vault) != "legacy":
         raise VaultError("this profile requires reviewed V2 proposals; legacy capture is disabled")
     if not text or not text.strip():
         raise ValueError("nothing to capture")
+    clean_episode, option_findings = _capture_options(vault, signal, source_episode)
 
     # Redact before persistence — the raw text never touches disk (G1).
     clean, findings = redact.redact(text, vault)
+    findings.extend(option_findings)
     clean_project = project
     if project:
         if "\n" in project or "\r" in project:
@@ -145,6 +243,8 @@ def learn(
         findings=findings,
         now=now,
         hash_input=clean,
+        signal=signal,
+        source_episode=clean_episode,
     )
 
 
@@ -153,12 +253,20 @@ def learn_structured(
     data: dict[str, Any],
     source_tool: str = "cli",
     now: datetime | None = None,
+    *,
+    signal: str = "normal",
+    source_episode: str | None = None,
 ) -> CaptureResult:
-    """Validate an agent-authored learning before admitting it to the inbox."""
+    """Validate structured learning; attention/linkage keywords follow learn().
+
+    Signal and source_episode are capture options, not observation payload
+    fields. Neither participates in the content hash or V2 admission.
+    """
     from .experience import get_mode
 
     if get_mode(vault) != "legacy":
         raise VaultError("this profile requires reviewed V2 proposals; legacy capture is disabled")
+    clean_episode, option_findings = _capture_options(vault, signal, source_episode)
     unknown = sorted(set(data) - _STRUCTURED_FIELDS)
     if unknown:
         raise ValueError(f"unknown structured learning fields: {', '.join(unknown)}")
@@ -222,7 +330,7 @@ def learn_structured(
 
     clean_title, title_findings = redact.redact(title.strip(), vault)
     clean_observations: list[tuple[str, str]] = []
-    findings = list(title_findings)
+    findings = [*title_findings, *option_findings]
     for kind, text in observations:
         clean, item_findings = redact.redact(text, vault)
         clean_observations.append((kind, clean))
@@ -243,4 +351,6 @@ def learn_structured(
         trust=trust,
         findings=findings,
         now=now,
+        signal=signal,
+        source_episode=clean_episode,
     )

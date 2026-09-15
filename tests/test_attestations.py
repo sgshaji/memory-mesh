@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 from helpers import directory_link, make_vault
 from memory_mesh import frontmatter
 from memory_mesh.attestations import read_attestation, write_attestation
 from memory_mesh.config import VaultError
+from memory_mesh.experience_store import RecordStore, exclusive_lock
 
 
 class TestAttestations(unittest.TestCase):
@@ -84,3 +86,25 @@ class TestAttestations(unittest.TestCase):
             )
         self.assertNotIn("SYNTHETIC_VALUE", str(failure.exception))
         self.assertIsNone(read_attestation(self.vault, "execution", "run-1"))
+
+    def test_execution_receipt_does_not_reacquire_an_already_held_curator_lock(self):
+        self.vault.path("_meta/config.md").write_text(
+            "---\ntype: meta\ncuration:\n  lock_timeout_seconds: 0.1\n---\n",
+            encoding="utf-8",
+        )
+        with exclusive_lock(self.vault, "curator"):
+            with RecordStore(self.vault).transaction():
+                path = write_attestation(self.vault, "execution", "run-locked", {"tests_run": 1})
+        self.assertTrue(path.exists())
+
+    def test_supervised_receipts_remain_available_to_non_curator_contributors(self):
+        self.vault.path("_meta/config.md").write_text(
+            "---\ntype: meta\ncuration:\n  mode: designated\n  curator: curator-alias\n---\n",
+            encoding="utf-8",
+        )
+        with patch.dict("os.environ", {"MEMORY_MESH_ACTOR": "contributor-alias"}):
+            with RecordStore(self.vault).transaction():
+                path = write_attestation(self.vault, "execution", "run-contributor", {"tests_run": 1})
+            self.assertTrue(path.exists())
+            with self.assertRaises(VaultError):
+                write_attestation(self.vault, "admission", "not-authorized", {"revision": 1})

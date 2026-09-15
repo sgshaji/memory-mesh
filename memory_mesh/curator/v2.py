@@ -18,6 +18,7 @@ from ..learning_flow import (
 )
 from ..notes import iter_notes, load_note
 from .review import archive_review_file, is_fully_decided, parse_review_file, pending_review_files
+from .transaction import curation_transaction
 
 
 def _timestamp(value: object) -> datetime:
@@ -204,7 +205,7 @@ def _publish(vault: Vault, note, report, today) -> None:
             ))
             report.touched.add(vault.rel(path))
             report.log("CREATE", vault.rel(path), "reviewed V2 lesson; confidence not inferred from speed")
-        engine._index_add_note(vault, load_note(path, vault), report, today)
+        engine._index_add_note(vault, load_note(path, vault), report, today, task_bound=True)
         metadata = dict(note.meta)
         metadata["processed"] = report.run_id
         fsutil.curator_write(vault, note.path, frontmatter.compose(metadata, note.body))
@@ -218,7 +219,9 @@ def run_compile(vault: Vault, now: datetime | None = None):
     if stamp.tzinfo is None:
         stamp = stamp.astimezone()
     today = stamp.date()
-    with exclusive_lock(vault, "curator"):
+    with exclusive_lock(vault, "curator"), curation_transaction(vault, existing_lock=True):
+        if get_mode(vault) != "strict":
+            raise VaultError("profile changed while waiting for strict curation; retry with the current profile")
         report = engine.RunReport(engine._run_id(stamp))
         for path in pending_review_files(vault):
             items = parse_review_file(path)

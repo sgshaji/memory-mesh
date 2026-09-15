@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from . import config, frontmatter, tokens
+from . import config, frontmatter, fsutil, tokens
+from .applicability import match_applicability
 from .config import Vault
-from .notes import WIKILINK_RE, load_note, resolve_ref
-from .schema import Issue
+from .notes import WIKILINK_RE, Note, load_note, resolve_ref
+from .schema import Issue, KNOWLEDGE_TYPES
 
 SECTIONS = (
     "Read first",
@@ -26,7 +28,33 @@ SECTIONS = (
 )
 # Sections whose links count against the ≤12 budget and feed recall.
 LINK_SECTIONS = ("Read first", "Known failures", "Current workarounds", "Active project")
-VALIDATED_ONLY_SECTIONS = ("Read first", "Current workarounds")
+VALIDATED_ONLY_SECTIONS = ("Read first", "Current workarounds", "Recently verified (30 days)")
+
+
+def _same_reference(entry: str, requested: str) -> bool:
+    entry, requested = entry.removesuffix(".md"), requested.removesuffix(".md")
+    if "/" in entry and "/" in requested:
+        return entry == requested
+    return entry.rsplit("/", 1)[-1] == requested.rsplit("/", 1)[-1]
+
+
+def eligible_for_section(
+    note: Note, section_name: str, *, now: datetime | date | None = None,
+    task_bound: bool = False,
+) -> bool:
+    """Current index eligibility, independent of reported confidence or popularity."""
+    if "v2_admission" in note.meta and not task_bound:
+        return False
+    if section_name in VALIDATED_ONLY_SECTIONS and note.status != "validated":
+        return False
+    if section_name == "Known failures" and note.status in ("stale", "resolved", "superseded", "rejected", "inactive"):
+        return False
+    if note.type in KNOWLEDGE_TYPES and section_name != "Recently changed":
+        if note.status in ("stale", "resolved", "superseded", "rejected", "inactive"):
+            return False
+        if match_applicability(note.meta.get("applies_to"), now=now).state == "mismatch":
+            return False
+    return True
 
 
 @dataclass
@@ -53,13 +81,11 @@ class DomainIndex:
         return sum(len(self.sections.get(s, [])) for s in LINK_SECTIONS)
 
     def find(self, ref: str) -> list[tuple[str, Entry]]:
-        tail = ref.split("/")[-1]
-        return [(s, e) for s, e in self.all_entries() if e.ref == ref or e.ref.split("/")[-1] == tail]
+        return [(s, e) for s, e in self.all_entries() if _same_reference(e.ref, ref)]
 
     def remove(self, ref: str) -> None:
-        tail = ref.split("/")[-1]
         for s in SECTIONS:
-            self.sections[s] = [e for e in self.sections.get(s, []) if e.ref != ref and e.ref.split("/")[-1] != tail]
+            self.sections[s] = [e for e in self.sections.get(s, []) if not _same_reference(e.ref, ref)]
 
     def add(self, section_name: str, ref: str, gloss: str = "") -> None:
         entries = self.sections.setdefault(section_name, [])
@@ -116,6 +142,22 @@ def render_index(di: DomainIndex, updated: str) -> str:
     return frontmatter.compose(meta, "\n".join(lines))
 
 
+def write_index_if_changed(vault: Vault, di: DomainIndex, updated: str) -> bool:
+    """Do not rewrite an index merely because the clock or curator run changed."""
+    path = fsutil.checked_regular_path(vault, di.path)
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    old_stamp = di.meta.get("updated")
+    stable = render_index(di, old_stamp if isinstance(old_stamp, str) else updated)
+    if stable == previous:
+        return False
+    rendered = render_index(di, updated)
+    if rendered == previous:
+        return False
+    fsutil.curator_write(vault, path, rendered)
+    di.meta.update(updated=updated, links=di.link_count())
+    return True
+
+
 def index_path(vault: Vault, domain: str) -> Path:
     return vault.path(config.INDEX_DIR) / f"{domain}.md"
 
@@ -156,6 +198,12 @@ def validate_index(di: DomainIndex, vault: Vault) -> list[Issue]:
             err(f"[[{e.ref}]] under `{s}` has status `{tnote.status}` — only validated notes belong there")
         if s == "Known failures" and tnote.status in ("resolved", "superseded", "stale"):
             err(f"[[{e.ref}]] under `Known failures` is {tnote.status} — move to Recently changed")
+        if (
+            tnote.type in KNOWLEDGE_TYPES and "v2_admission" not in tnote.meta
+            and s in (*LINK_SECTIONS, "Recently verified (30 days)")
+            and match_applicability(tnote.meta.get("applies_to")).state == "mismatch"
+        ):
+            err(f"[[{e.ref}]] under `{s}` is outside its current applicability window")
         if len(e.gloss.split()) > 12 and s in LINK_SECTIONS:
             warn(f"gloss for [[{e.ref}]] exceeds twelve words")
     body_tokens = tokens.estimate(di.path.read_text(encoding="utf-8"))

@@ -16,7 +16,9 @@ Build a compact JSON object with:
   `behaviour`, `procedure`, `fix`, `workaround`, `limitation`, `reason`,
   `outcome`, and `evidence`. Include at least one actionable kind and one
   `outcome` or `evidence`;
-- optional `domain`, `project`, and `trust`.
+- optional `domain`, `project`, `trust`, `signal` (`high`, `normal`, or `low`),
+  and `source_episode` when an existing episode supplies context. Signal
+  controls review attention, not truth or approval.
 
 Pass the JSON as one safely quoted argument, or on standard input. For example:
 

@@ -5,7 +5,9 @@ from helpers import make_vault
 
 from memory_mesh import config
 from memory_mesh.curator import engine
-from memory_mesh.curator.review import parse_review_file, pending_review_files
+from memory_mesh.curator.analytics import assess_knowledge
+from memory_mesh.curator.decisions import Decision
+from memory_mesh.curator.review import write_review_file
 from memory_mesh.frontmatter import parse as fm_parse
 from memory_mesh.notes import load_note
 
@@ -57,7 +59,7 @@ class TestContradiction(unittest.TestCase):
         if self._tmp:
             self._tmp.cleanup()
 
-    def test_single_same_version_failure_holds_and_drops_confidence(self):
+    def test_single_failure_holds_without_an_extra_confidence_decrement(self):
         _episode_with_outcome(self.vault, "2026-09-02-cs-fail1", "cs-optional-properties",
                               "failed", "behaviour appears changed on this build")
         engine.run_compile(self.vault, now=NOW)  # mines the episode
@@ -65,38 +67,64 @@ class TestContradiction(unittest.TestCase):
         holds = [d for d in report.decisions if d.kind == "HOLD" and d.target_ref.endswith("cs-optional-properties")]
         self.assertTrue(holds, msg="\n".join(f"{d.kind} {d.target_ref}" for d in report.decisions))
         meta, _ = fm_parse(self.vault.path("knowledge/tools/cs-optional-properties.md").read_text(encoding="utf-8"))
-        # held 1 + failed 1 → medium base, then failure drop → low
-        self.assertEqual(meta["confidence"], "low")
+        self.assertEqual(meta["confidence"], "medium")
         self.assertEqual(meta["feedback"]["failed"], 1)
+        health = assess_knowledge(self.vault, "knowledge/tools/cs-optional-properties", now=NOW)
+        self.assertEqual(meta["confidence"], health.evidence.confidence)
+        self.assertFalse(health.possible_behaviour_change)
         # no destructive action happened
         self.assertEqual(meta["status"], "validated")
 
-    def test_repeated_same_version_failure_proposes_supersede(self):
-        for i, day in enumerate(("02", "03")):
-            _episode_with_outcome(self.vault, f"2026-09-{day}-cs-fail{i}", "cs-optional-properties",
-                                  "failed", "still broken", captured=f"2026-09-{day}T10:00:00+05:30")
+    def test_repeated_unknown_failures_request_review_without_superseding(self):
+        for i, hour in enumerate(("10", "11")):
+            _episode_with_outcome(self.vault, f"2026-09-02-cs-fail{i}", "cs-optional-properties",
+                                  "failed", "still broken", captured=f"2026-09-02T{hour}:00:00+05:30")
         engine.run_compile(self.vault, now=NOW)
         report = engine.run_lint(self.vault, now=NOW)
-        props = [d for d in report.decisions if d.kind == "SUPERSEDE" and "cs-optional-properties" in d.target_ref]
+        props = [
+            d for d in report.decisions if d.kind == "HOLD"
+            and d.payload.get("review_only") is True and "cs-optional-properties" in d.target_ref
+        ]
         self.assertTrue(props)
-        # gated: nothing applied yet
+        self.assertFalse(any(d.kind == "SUPERSEDE" for d in report.decisions))
         meta, _ = fm_parse(self.vault.path("knowledge/tools/cs-optional-properties.md").read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "validated")
+        self.assertEqual(meta["feedback"]["failed"], 2)
 
-    def test_different_version_failure_routes_to_supersede(self):
+    def test_version_prose_does_not_invent_an_applicability_change(self):
         _episode_with_outcome(self.vault, "2026-09-02-cs-fail2", "cs-optional-properties",
                               "failed", "fails on the 2026-09 build")
         engine.run_compile(self.vault, now=NOW)
         report = engine.run_lint(self.vault, now=NOW)
-        props = [d for d in report.decisions if d.kind == "SUPERSEDE" and "different version" in d.rationale]
+        props = [d for d in report.decisions if d.kind == "HOLD" and "cs-optional-properties" in d.target_ref]
         self.assertTrue(props)
+        self.assertFalse(any(d.kind == "SUPERSEDE" for d in report.decisions))
+        note = load_note(self.vault.path("knowledge/tools/cs-optional-properties.md"), self.vault)
+        self.assertFalse(assess_knowledge(self.vault, note, now=NOW).possible_behaviour_change)
+        self.assertIsNone(note.meta["applies_to"].get("to"))
+
+    def _approve_explicit_supersede(self):
+        self.test_repeated_unknown_failures_request_review_without_superseding()
+        target = "knowledge/tools/cs-optional-properties.md"
+        decision = Decision(
+            "SUPERSEDE", "Independent human review requests closing this applicability window",
+            target_ref=target.removesuffix(".md"),
+            payload={"target": target, "new_ref": "", "new_content": "", "close_to": "2026-09-02"},
+        )
+        path = write_review_file(self.vault, "explicit-review", NOW.date(), [decision])
+        self.assertIsNotNone(path)
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            .replace("[ ] approve   [ ] hold", "[x] approve   [ ] hold")
+            .replace("[ ] acknowledged", "[x] acknowledged"),
+            encoding="utf-8",
+        )
+        return path
 
     def test_supersede_no_dangling_reference(self):
         # a supersession with no successor note must not point superseded_by
         # at a note that was never created (§6: history stays navigable)
-        self.test_repeated_same_version_failure_proposes_supersede()
-        f = pending_review_files(self.vault)[0]
-        f.write_text(f.read_text(encoding="utf-8").replace("[ ] approve   [ ] hold", "[x] approve   [ ] hold"), encoding="utf-8")
+        self._approve_explicit_supersede()
         engine.run_compile(self.vault, now=NOW)
         meta, _ = fm_parse(self.vault.path("knowledge/tools/cs-optional-properties.md").read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "superseded")
@@ -112,9 +140,7 @@ class TestContradiction(unittest.TestCase):
                 self.assertIsNotNone(resolve_ref(self.vault, e.ref), f"index links dangling ref {e.ref}")
 
     def test_approved_supersede_closes_window_and_keeps_history(self):
-        self.test_repeated_same_version_failure_proposes_supersede()
-        f = pending_review_files(self.vault)[0]
-        f.write_text(f.read_text(encoding="utf-8").replace("[ ] approve   [ ] hold", "[x] approve   [ ] hold"), encoding="utf-8")
+        self._approve_explicit_supersede()
         engine.run_compile(self.vault, now=NOW)
         p = self.vault.path("knowledge/tools/cs-optional-properties.md")
         self.assertTrue(p.exists())  # old notes are never deleted
@@ -128,8 +154,9 @@ class TestContradiction(unittest.TestCase):
         di = parse_index(self.vault.path("knowledge/_index/copilot-studio.md"), self.vault)
         live = [e.ref for s in ("Read first", "Current workarounds") for e in di.sections.get(s, [])]
         self.assertNotIn("cs-optional-properties", live)
+        self.assertNotIn("knowledge/tools/cs-optional-properties", live)
         changed = [e.ref for e in di.sections.get("Recently changed", [])]
-        self.assertIn("cs-optional-properties", changed)
+        self.assertIn("knowledge/tools/cs-optional-properties", changed)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from .experience_store import ExperienceLimit, RecordStore
 from .experience_types import TaskSnapshot, digest, require_id, require_revision, require_strings, version_matches
 from .learning_admission import Proposal, assess, parse_proposal
 from .notes import Note, load_note, resolve_ref
+from .outcome_types import FAILURE_REASONS, OutcomeEvent, event_from_dict, parse_timestamp
 from .router import load_domains
 
 if TYPE_CHECKING:
@@ -82,7 +83,7 @@ def load_proposal(record: dict[str, Any], proposal_id: str) -> dict[str, Any]:
         "proposal", "proposal_hash", "content_hash", "source", "state", "feedback",
         "created_at", "admission_key", "candidate_ref",
     }
-    if not isinstance(entry, dict) or set(entry) != fields:
+    if not isinstance(entry, dict) or not fields <= entry.keys() or entry.keys() - (fields | {"feedback_history"}):
         raise VaultError("proposal was not found or has an invalid record")
     proposal = parse_proposal(entry["proposal"])
     if proposal is None or proposal.proposal_id != proposal_id:
@@ -93,6 +94,21 @@ def load_proposal(record: dict[str, Any], proposal_id: str) -> dict[str, Any]:
         raise VaultError("invalid recorded proposal state")
     if not isinstance(entry["feedback"], dict) or len(entry["feedback"]) > 64:
         raise VaultError("invalid or over-budget proposal feedback")
+    history = entry.get("feedback_history", {})
+    if not isinstance(history, dict) or len(history) > MAX_EVENTS:
+        raise VaultError("invalid or over-budget proposal feedback history")
+    for key, raw_event in history.items():
+        event = event_from_dict(raw_event)
+        if (
+            not isinstance(key, str) or not key.startswith("reuse-")
+            or key not in record["events"]
+            or event.event_id not in {
+                "v2-" + key.removeprefix("reuse-"),
+                _feedback_event_id(record["task_id"], proposal_id, key),
+            }
+            or event.subject_type != "knowledge" or event.source != "v2-reuse"
+        ):
+            raise VaultError("feedback history does not match a recorded reuse event")
     source = entry["source"]
     source_fields = {
         "task_id", "project", "tool", "version", "revision", "goal",
@@ -347,44 +363,111 @@ def record_feedback(
         key = "reuse-" + digest([task_id, proposal.proposal_id, event_id])
         if key in source["events"]:
             event_replayed(source, key, request)
-            return {
+            raw_event = entry.get("feedback_history", {}).get(key)
+            projection = event_from_dict(raw_event) if raw_event is not None else None
+            if projection is not None:
+                expected = _feedback_projection(
+                    key=key, timestamp=projection.timestamp, task=target,
+                    note_ref=note.ref, domain=proposal.domain, outcome=outcome, reason=reason,
+                    origin_task=source["task_id"], proposal_id=proposal.proposal_id,
+                )
+                if projection.event_id == "v2-" + key.removeprefix("reuse-"):
+                    expected = replace(expected, event_id=projection.event_id)
+                if projection != expected:
+                    raise VaultError("feedback history does not match the validated reuse request")
+            result = {
                 "recorded": True, "replayed": True, "lesson_state": entry["state"],
                 "distinct_task_records": len(entry["feedback"]), "causal_claims_supported": False,
             }
-        feedback_count = sum(len(item.get("feedback", {})) for item in source["proposals"].values())
-        full = len(source["events"]) >= MAX_EVENTS or (
-            task_id not in entry["feedback"] and feedback_count >= 64
-        )
-        if full:
+        else:
+            feedback_count = sum(len(item.get("feedback", {})) for item in source["proposals"].values())
+            full = len(source["events"]) >= MAX_EVENTS or (
+                task_id not in entry["feedback"] and feedback_count >= 64
+            )
+            if full:
+                if outcome == "failed":
+                    entry["state"] = "held"
+                    store.save("tasks", source["task_id"], source)
+                return {
+                    "recorded": False, "outcome": "defer", "lesson_state": entry["state"],
+                    "reasons": ["receipt_budget_exhausted"], "causal_claims_supported": False,
+                }
+            recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            projection = _feedback_projection(
+                key=key, timestamp=recorded_at, task=target, note_ref=note.ref,
+                domain=proposal.domain, outcome=outcome, reason=reason,
+                origin_task=source["task_id"], proposal_id=proposal.proposal_id,
+            )
+            entry["feedback"][task_id] = {
+                **request, "verification": verification, "recorded_at": recorded_at,
+            }
+            entry.setdefault("feedback_history", {})[key] = projection.as_dict()
             if outcome == "failed":
                 entry["state"] = "held"
+            source["events"][key] = digest(request)
+            try:
                 store.save("tasks", source["task_id"], source)
-            return {
-                "recorded": False, "outcome": "defer", "lesson_state": entry["state"],
-                "reasons": ["receipt_budget_exhausted"], "causal_claims_supported": False,
+            except ExperienceLimit:
+                if outcome != "failed":
+                    raise
+                preserved = load_task_record(store, source["task_id"])
+                load_proposal(preserved, proposal.proposal_id)["state"] = "held"
+                store.save("tasks", source["task_id"], preserved)
+                return {
+                    "recorded": False, "outcome": "defer", "lesson_state": "held",
+                    "reasons": ["receipt_budget_exhausted"], "causal_claims_supported": False,
+                }
+            result = {
+                "recorded": True, "replayed": False, "outcome": outcome,
+                "verification": verification, "usage_basis": "operator-reported",
+                "lesson_state": entry["state"], "distinct_task_records": len(entry["feedback"]),
+                "causal_claims_supported": False,
             }
-        entry["feedback"][task_id] = {
-            **request, "verification": verification,
-            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-        if outcome == "failed":
-            entry["state"] = "held"
-        source["events"][key] = digest(request)
-        try:
-            store.save("tasks", source["task_id"], source)
-        except ExperienceLimit:
-            if outcome != "failed":
-                raise
-            preserved = load_task_record(store, source["task_id"])
-            load_proposal(preserved, proposal.proposal_id)["state"] = "held"
-            store.save("tasks", source["task_id"], preserved)
-            return {
-                "recorded": False, "outcome": "defer", "lesson_state": "held",
-                "reasons": ["receipt_budget_exhausted"], "causal_claims_supported": False,
-            }
-        return {
-            "recorded": True, "replayed": False, "outcome": outcome,
-            "verification": verification, "usage_basis": "operator-reported",
-            "lesson_state": entry["state"], "distinct_task_records": len(entry["feedback"]),
-            "causal_claims_supported": False,
-        }
+    if projection is None:
+        result["feedback_journal"] = "legacy-receipt-only"
+    else:
+        _publish_feedback_projection(vault, projection)
+        result["feedback_event"] = projection.event_id
+    return result
+
+
+def _feedback_event_id(origin_task: str, proposal_id: str, key: str) -> str:
+    return "v2-" + digest(["reuse-projection", admission_key(origin_task, proposal_id), key])
+
+
+def _feedback_projection(
+    *, key: str, timestamp: str, task: TaskSnapshot, note_ref: str,
+    domain: str, outcome: str, reason: str, origin_task: str, proposal_id: str,
+) -> OutcomeEvent:
+    return OutcomeEvent(
+        event_id=_feedback_event_id(origin_task, proposal_id, key),
+        timestamp=timestamp, session_id=task.task_id,
+        subject_type="knowledge", subject_id=note_ref, outcome=outcome,
+        reason=(reason if reason in FAILURE_REASONS else "unknown") if outcome == "failed" else None,
+        domain=domain, source="v2-reuse", detail=reason,
+        context={
+            "task_id": task.task_id, "revision": str(task.revision),
+            "project": task.project, "tool": task.tool, "version": task.version,
+        },
+    )
+
+
+def _publish_feedback_projection(vault: Vault, event: OutcomeEvent) -> None:
+    from .outcomes import OutcomeIdentityConflict, record_outcome
+
+    try:
+        record_outcome(
+            vault, session_id=event.session_id, subject_type=event.subject_type,
+            subject_id=event.subject_id, outcome=event.outcome, reason=event.reason,
+            domain=event.domain, context=event.context, source=event.source,
+            detail=event.detail, event_id=event.event_id, now=parse_timestamp(event.timestamp),
+        )
+    except OutcomeIdentityConflict as exc:
+        raise VaultError(
+            "reuse receipt was saved but its immutable journal ID belongs to another intent; "
+            "history was preserved. Use a distinct feedback event ID to repair a legacy namespace collision"
+        ) from exc
+    except VaultError as exc:
+        raise VaultError(
+            "reuse receipt was saved but feedback journal capture failed; retry the same event ID"
+        ) from exc

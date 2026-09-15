@@ -9,6 +9,12 @@ __pycache__/
 /build/
 /dist/
 
+# Disposable repository-local validation workspaces.
+/.agent-*-tests/
+/mm-test-*/
+/mm-feedback-source-*/
+/mm-feedback-target-*/
+
 # OS noise
 Thumbs.db
 .DS_Store

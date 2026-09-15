@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from . import frontmatter, fsutil, redact
-from .config import Vault, VaultError
+from .config import EXPERIENCE_RECORDS, Vault, VaultError
 
 MAX_RECORD_BYTES = 262144
 _MAX_JSON_DEPTH = 32
@@ -203,7 +203,7 @@ class RecordStore:
             raise ExperienceError("The record bucket is invalid.")
         return _checked_path(
             self.vault,
-            self.vault.root / "projects" / "_memory-mesh-v2" / "records" / bucket
+            self.vault.path(EXPERIENCE_RECORDS) / bucket
         )
 
     def _reject_sensitive(self, text: str) -> None:
@@ -305,11 +305,16 @@ class RecordStore:
 
     def _read_bytes(self, path: Path) -> bytes | None:
         path = _checked_path(self.vault, path)
+        from .curator.transaction import current_transaction
+
+        curation = current_transaction(self.vault)
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         flags |= getattr(os, "O_NONBLOCK", 0)
         try:
             fd = os.open(path, flags)
         except FileNotFoundError:
+            if curation is not None:
+                curation.observe(path, None)
             return None
         except OSError:
             raise ExperienceError("The record could not be opened.") from None
@@ -323,6 +328,8 @@ class RecordStore:
                 raw = stream.read(MAX_RECORD_BYTES + 1)
             if len(raw) > MAX_RECORD_BYTES:
                 raise ExperienceLimit("The record exceeds the byte limit.")
+            if curation is not None:
+                curation.observe(path, raw)
             return raw
         except OSError:
             raise ExperienceError("The record could not be read.") from None

@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Mapping
 
 from . import config, frontmatter, fsutil, gitutil, tokens
 from .config import Vault
 from .indexes import SECTIONS, load_index
-from .notes import load_note, resolve_ref
+from .notes import NoteReferenceError, load_note
 
 _PRIORITY = (
     "Read first",
@@ -26,14 +27,25 @@ class PackError(Exception):
     pass
 
 
-def _note_block(vault: Vault, ref: str) -> str | None:
-    path = resolve_ref(vault, ref)
+def _note_block(
+    vault: Vault, ref: str, *, context: Mapping[str, str] | None = None,
+    now: datetime | None = None,
+) -> str | None:
+    from .applicability import match_applicability
+    from .recall import _EXCLUDED_STATUSES, resolve_index_ref
+
+    try:
+        path = resolve_index_ref(vault, ref)
+    except NoteReferenceError as exc:
+        raise PackError(f"invalid note reference in context pack: {exc}") from exc
     if path is None:
         return None
     note = load_note(path, vault)
-    if note.meta.get("v2_admission"):
+    if note.parse_error or note.meta.get("v2_admission") or note.status in _EXCLUDED_STATUSES:
         return None
     ap = note.meta.get("applies_to")
+    if match_applicability(ap, context=context, now=now).state == "mismatch":
+        return None
     lines = [f"### {note.title}"]
     detail = []
     if ap:
@@ -50,7 +62,10 @@ def _note_block(vault: Vault, ref: str) -> str | None:
     return "\n".join(lines)
 
 
-def compile_pack(vault: Vault, domain: str, now: datetime | None = None) -> Path:
+def compile_pack(
+    vault: Vault, domain: str, now: datetime | None = None, *,
+    context: Mapping[str, str] | None = None,
+) -> Path:
     """Deterministic compile of `outputs/context/<domain>-current.md`.
 
     Body: the index sections, each link replaced by title, applies_to,
@@ -83,7 +98,7 @@ def compile_pack(vault: Vault, domain: str, now: datetime | None = None) -> Path
     blocks: list[tuple[str, str, str]] = []  # (section, ref, text)
     for sec in _PRIORITY:
         for entry in di.sections.get(sec, []):
-            block = _note_block(vault, entry.ref)
+            block = _note_block(vault, entry.ref, context=context, now=dt)
             if block is not None:
                 blocks.append((sec, entry.ref, block))
 
@@ -126,7 +141,10 @@ def compile_pack(vault: Vault, domain: str, now: datetime | None = None) -> Path
     return out
 
 
-def compile_all(vault: Vault, now: datetime | None = None) -> list[Path]:
+def compile_all(
+    vault: Vault, now: datetime | None = None, *,
+    context: Mapping[str, str] | None = None,
+) -> list[Path]:
     out = []
     base = vault.path(config.INDEX_DIR)
     if not base.is_dir():
@@ -134,7 +152,7 @@ def compile_all(vault: Vault, now: datetime | None = None) -> list[Path]:
     for p in sorted(base.glob("*.md")):
         if p.name.startswith("_"):
             continue
-        out.append(compile_pack(vault, p.stem, now))
+        out.append(compile_pack(vault, p.stem, now, context=context))
     return out
 
 

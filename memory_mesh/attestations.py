@@ -64,14 +64,21 @@ def _validate(vault: Vault, value: object, depth: int = 0) -> None:
 
 def read_attestation(vault: Vault, kind: str, key: str) -> dict[str, Any] | None:
     path = attestation_path(vault, kind, key)
-    if not path.exists():
-        return None
+    from .curator.transaction import current_transaction
+
+    curation = current_transaction(vault)
     try:
         with path.open("rb") as source:
             raw = source.read(MAX_ATTESTATION_BYTES + 1)
         if len(raw) > MAX_ATTESTATION_BYTES:
             raise VaultError("attestation exceeds its byte limit")
+        if curation is not None:
+            curation.observe(path, raw)
         meta, _body = frontmatter.parse(raw.decode("utf-8"))
+    except FileNotFoundError:
+        if curation is not None:
+            curation.observe(path, None)
+        return None
     except (OSError, UnicodeError, ValueError) as exc:
         raise VaultError("attestation could not be decoded") from exc
     fields = {"type", "title", "schema_version", "kind", "key", "content_hash", "payload"}
@@ -106,4 +113,10 @@ def write_attestation(vault: Vault, kind: str, key: str, payload: dict[str, Any]
     )
     if len(text.encode("utf-8")) > MAX_ATTESTATION_BYTES:
         raise VaultError("attestation exceeds its byte limit")
-    return fsutil.curator_write(vault, path, text)
+    if kind == "execution":
+        # The supervised runner holds the experience lock; execution evidence
+        # is application-owned, not a privilege reserved to the curator.
+        path = fsutil.checked_regular_path(vault, path)
+        fsutil.atomic_write(path, text, expected_hash=None)
+        return path
+    return fsutil.curator_write(vault, path, text, expected_hash=None)

@@ -1,9 +1,11 @@
 import unittest
+import os
 from pathlib import Path
+from unittest import mock
 
-from helpers import make_vault
+from helpers import directory_link, make_vault
 
-from memory_mesh import fsutil, redact
+from memory_mesh import fsutil, redact, notes
 from memory_mesh.fsutil import PathTraversalError, WriteBoundaryError
 
 
@@ -107,6 +109,151 @@ class TestSafety(unittest.TestCase):
         self.assertNotEqual(fsutil.safe_slug("CON"), "con")
         self.assertEqual(fsutil.safe_slug("../../etc/passwd"), "etc-passwd")
         self.assertEqual(fsutil.safe_slug(""), "note")
+
+    def test_atomic_expected_hash_refuses_changed_bytes(self):
+        path = self.vault.path("00-inbox/hash.md")
+        path.write_bytes(b"old")
+        expected = fsutil.file_hash(path)
+        path.write_bytes(b"manual")
+        with self.assertRaises(fsutil.WriteConflictError):
+            fsutil.atomic_write(path, "decision", expected_hash=expected)
+        self.assertEqual(path.read_bytes(), b"manual")
+        self.assertEqual(list(path.parent.glob(".mm-*.tmp")), [])
+
+    def test_atomic_create_only_does_not_overwrite(self):
+        path = self.vault.path("00-inbox/create-only.md")
+        fsutil.atomic_write(path, "first", expected_hash=None)
+        with self.assertRaises(fsutil.WriteConflictError):
+            fsutil.atomic_write(path, "second", expected_hash=None)
+        self.assertEqual(path.read_bytes(), b"first")
+
+    def test_atomic_guard_rechecks_after_writing_adjacent_file(self):
+        path = self.vault.path("00-inbox/recheck.md")
+        path.write_bytes(b"old")
+        real_fsync = os.fsync
+
+        def edit_during_sync(fd):
+            path.write_bytes(b"manual")
+            return real_fsync(fd)
+
+        with mock.patch.object(fsutil.os, "fsync", side_effect=edit_during_sync):
+            with self.assertRaises(fsutil.WriteConflictError):
+                fsutil.atomic_write(path, "decision", expected_hash=fsutil.content_hash(b"old"))
+        self.assertEqual(path.read_bytes(), b"manual")
+        self.assertEqual(list(path.parent.glob(".mm-*.tmp")), [])
+
+    def test_reference_separators_and_extension(self):
+        expected = self.vault.path("knowledge/patterns/validation-order.md")
+        for ref in (
+            "validation-order", "validation-order.md",
+            "knowledge/patterns/validation-order", "knowledge\\patterns\\validation-order.md",
+        ):
+            self.assertEqual(notes.resolve_ref(self.vault, ref), expected, ref)
+
+    def test_qualified_missing_reference_never_falls_back(self):
+        self.assertIsNone(notes.resolve_ref(self.vault, "knowledge/tools/validation-order"))
+        self.assertIsNone(notes.resolve_ref(self.vault, "does-not-exist"))
+
+    def test_invalid_note_references_have_explicit_errors(self):
+        for ref in (
+            "", "/knowledge/patterns/validation-order", "../validation-order",
+            "knowledge\\..\\patterns\\validation-order", "C:\\vault\\note",
+            "C:note", "\\\\server\\share\\note", "knowledge//patterns/note",
+            "./validation-order", "knowledge/patterns/note:stream", "NUL.md",
+            "knowledge/patterns/note.\u0000", "knowledge/patterns/note.",
+        ):
+            with self.subTest(ref=ref), self.assertRaises(notes.NoteReferenceError):
+                notes.resolve_ref(self.vault, ref)
+
+    def test_ambiguous_basename_requires_qualified_reference(self):
+        other = self.vault.path("knowledge/tools/validation-order.md")
+        other.write_bytes(b"other")
+        with self.assertRaisesRegex(notes.NoteReferenceError, "ambiguous"):
+            notes.resolve_ref(self.vault, "validation-order")
+        self.assertEqual(notes.resolve_ref(self.vault, "knowledge/tools/validation-order"), other)
+
+    def test_nested_ambiguous_basename_is_not_selected_arbitrarily(self):
+        nested = self.vault.path("projects/nested/validation-order.md")
+        nested.parent.mkdir()
+        nested.write_bytes(b"project")
+        with self.assertRaises(notes.NoteReferenceError):
+            notes.resolve_ref(self.vault, "validation-order")
+
+    def test_reference_junction_escape_and_write_are_blocked(self):
+        outside = self.vault.root.parent / "outside"
+        outside.mkdir()
+        (outside / "private.md").write_bytes(b"outside")
+        link = self.vault.path("knowledge/patterns/redirect")
+        directory_link(link, outside)
+        with self.assertRaises(notes.NoteReferenceError):
+            notes.resolve_ref(self.vault, "knowledge/patterns/redirect/private")
+        with self.assertRaises(PathTraversalError):
+            notes.load_note(link / "private.md", self.vault)
+        with self.assertRaises(PathTraversalError):
+            fsutil.curator_write(self.vault, link / "private.md", "overwrite")
+        self.assertEqual((outside / "private.md").read_bytes(), b"outside")
+        self.assertIsNone(notes.resolve_ref(self.vault, "private"))
+
+    def test_reference_file_symlink_is_rejected(self):
+        source = self.vault.path("knowledge/patterns/validation-order.md")
+        link = source.with_name("linked-note.md")
+        try:
+            link.symlink_to(source)
+        except OSError as exc:
+            if os.name == "nt" and exc.winerror == 1314:
+                self.skipTest("Windows symlink creation privilege unavailable")
+            raise
+        with self.assertRaises(notes.NoteReferenceError):
+            notes.resolve_ref(self.vault, "knowledge/patterns/linked-note")
+
+    def test_load_note_checks_containment_before_reading(self):
+        outside = self.vault.root.parent / "outside-note.md"
+        outside.write_bytes(b"outside fixture data")
+        with mock.patch.object(fsutil, "read_regular_bytes", side_effect=AssertionError("must not read outside")):
+            with self.assertRaises(PathTraversalError):
+                notes.load_note(outside, self.vault)
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended-path spelling")
+    def test_resolved_extended_windows_prefix_preserves_containment(self):
+        target = self.vault.path("knowledge/patterns/validation-order.md")
+        extended = Path("\\\\?\\" + str(target))
+        with mock.patch.object(Path, "resolve", return_value=extended):
+            self.assertEqual(fsutil.ensure_within(self.vault, target), target)
+            self.assertEqual(fsutil.checked_regular_path(self.vault, target), target)
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended-path spelling")
+    def test_resolved_extended_windows_prefix_does_not_allow_escape(self):
+        target = self.vault.path("knowledge/patterns/validation-order.md")
+        outside = Path("\\\\?\\" + str(self.vault.root.parent / "outside.md"))
+        with mock.patch.object(Path, "resolve", return_value=outside):
+            with self.assertRaises(PathTraversalError):
+                fsutil.ensure_within(self.vault, target)
+
+    def test_hardlinked_note_targets_are_rejected_before_reading(self):
+        outside = self.vault.root.parent / "hardlink-source.md"
+        outside.write_bytes(b"outside fixture bytes")
+        linked = self.vault.path("knowledge/patterns/hardlinked.md")
+        os.link(outside, linked)
+        self.assertGreater(linked.stat().st_nlink, 1)
+        with self.subTest(operation="load"), self.assertRaises(PathTraversalError):
+            notes.load_note(linked, self.vault)
+        with self.subTest(operation="resolve"), self.assertRaises(notes.NoteReferenceError):
+            notes.resolve_ref(self.vault, "knowledge/patterns/hardlinked")
+        self.assertEqual(outside.read_bytes(), b"outside fixture bytes")
+
+    def test_hardlink_added_after_path_check_is_rejected_by_open_handle(self):
+        target = self.vault.path("knowledge/patterns/validation-order.md")
+        alias = self.vault.root.parent / "late-hardlink.md"
+        native_open = os.open
+
+        def linked_open(path, *args, **kwargs):
+            if Path(path) == target and not alias.exists():
+                os.link(target, alias)
+            return native_open(path, *args, **kwargs)
+
+        with mock.patch.object(fsutil.os, "open", side_effect=linked_open):
+            with self.assertRaisesRegex(PathTraversalError, "hard-linked"):
+                notes.load_note(target, self.vault)
 
 
 if __name__ == "__main__":

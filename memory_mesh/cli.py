@@ -21,7 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import capture, config, episodes, gitutil, packs, recall as recall_mod, redact, tokens
+from . import capture, config, episodes, fsutil, gitutil, packs, recall as recall_mod, redact, tokens
 from .config import Vault, VaultError, find_vault
 from .curator import engine
 from .curator.review import pending_review_files
@@ -50,7 +50,7 @@ def _print(s: str = "") -> None:
 
 def cmd_learn(args) -> int:
     vault = _vault(args)
-    text = args.text if args.text else sys.stdin.read()
+    text = args.text if args.text is not None else sys.stdin.read()
     if args.structured:
         try:
             data = json.loads(text)
@@ -62,6 +62,8 @@ def cmd_learn(args) -> int:
             ("domain", args.domain),
             ("project", args.project),
             ("trust", args.trust),
+            ("signal", args.signal),
+            ("source_episode", args.source_episode),
         ):
             if value is None:
                 continue
@@ -69,27 +71,36 @@ def cmd_learn(args) -> int:
                 raise VaultError(f"structured learning `{key}` conflicts with --{key}")
             data[key] = value
         try:
-            res = capture.learn_structured(vault, data, source_tool=args.tool)
+            signal = data.pop("signal", "normal")
+            source_episode = data.pop("source_episode", None)
+            res = capture.learn_structured(
+                vault, data, source_tool=args.tool, signal=signal,
+                source_episode=source_episode,
+            )
         except ValueError as exc:
             raise VaultError(str(exc)) from exc
     else:
-        res = capture.learn(
-            vault,
-            text,
-            source_tool=args.tool,
-            domain=args.domain,
-            project=args.project,
-            trust=args.trust or "first-party",
-        )
-    verb = "captured" if res.created else "already captured (identical content)"
+        try:
+            res = capture.learn(
+                vault, text, source_tool=args.tool, domain=args.domain,
+                project=args.project, trust=args.trust or "first-party",
+                signal=args.signal or "normal", source_episode=args.source_episode,
+            )
+        except ValueError as exc:
+            raise VaultError(str(exc)) from exc
+    verb = "captured" if res.created else "updated candidate attention" if res.updated else "already captured (identical content)"
     _print(f"{verb}: {vault.rel(res.path)}")
     if res.redacted:
         _print("note: sensitive content was redacted before writing (" + ", ".join(f.rule for f in res.findings) + ")")
+    for warning in res.warnings:
+        _print(f"warning: {warning}")
     return 0
 
 
 def cmd_recall(args) -> int:
     vault = _vault(args)
+    if args.capture_gap and args.no_log:
+        raise VaultError("--capture-gap requires recorded recall; remove --no-log")
     from .experience import get_mode
     from .host_lifecycle import bound_task
 
@@ -99,13 +110,39 @@ def cmd_recall(args) -> int:
     res = recall_mod.recall(
         vault, args.task, tool=args.tool, log=not args.no_log,
         session_id=args.session, task_id=task_id,
+        context={
+            name: value for name, value in (
+                ("tool", args.context_tool), ("product", args.product),
+                ("version", args.version), ("project", args.project),
+            ) if value is not None
+        } or None,
+        attempt_id=args.attempt_id,
     )
+    gap_ref = None
+    if args.capture_gap and res.attempt_id is not None:
+        from .feedback_cli import capture_gap_for_session
+        from .routing_diagnostics import read_attempt
+
+        attempt = read_attempt(vault, res.attempt_id)
+        if attempt.potential_gap:
+            gap = capture_gap_for_session(
+                vault, attempt.task_text, domain=attempt.domains[0],
+                session_id=attempt.session_id,
+            )
+            gap_ref = vault.rel(gap)
     if args.json:
-        _print(json.dumps(res.as_payload(), indent=2))
+        payload = res.as_payload()
+        if res.attempt_id is not None:
+            payload["attempt_id"] = res.attempt_id
+        if gap_ref is not None:
+            payload["gap_candidate"] = gap_ref
+        _print(json.dumps(payload, indent=2))
     else:
         _print(res.context_markdown())
         if res.mode == "legacy":
             _print(f"\n<!-- recall: domains={','.join(res.domains)} notes={len(res.notes)} tokens≈{res.token_total} -->")
+        if gap_ref is not None:
+            _print(f"\nresearch gap captured: {gap_ref} (not a factual knowledge claim)")
     return 0
 
 
@@ -175,7 +212,14 @@ def cmd_session_end(args) -> int:
     sid = args.session or "default"
     state = recall_mod.load_session_state(vault, sid)
     retrieved = state.get("retrieved", [])
-    if not retrieved and not args.force:
+    from .outcomes import read_events
+
+    meaningful = bool(
+        retrieved or state.get("recalled") or state.get("recall_attempts")
+        or state.get("gap_candidates") or state.get("checkpoints")
+        or read_events(vault, session_id=sid)
+    )
+    if not meaningful and not args.force:
         recall_mod.clear_session_state(vault, sid)
         _print("session retrieved nothing; skipping the episode (episode.md: may skip)")
         return 0
@@ -188,16 +232,8 @@ def cmd_session_end(args) -> int:
         retrieved=retrieved,
         domains=domains,
         project=args.project,
+        session_id=sid,
     )
-    for cp in state.get("checkpoints", []):
-        if isinstance(cp, dict):  # checkpoint keeps its original PreCompact time
-            try:
-                at = datetime.fromisoformat(cp.get("at", ""))
-            except ValueError:
-                at = None
-            episodes.checkpoint(vault, path, cp.get("text", ""), now=at)
-        else:
-            episodes.checkpoint(vault, path, str(cp))
     # the session is over: its scratch state has served its only purpose
     recall_mod.clear_session_state(vault, sid)
     _print(f"episode stub: {vault.rel(path)} (status: raw — fill it and run `memory episode finish`)")
@@ -209,8 +245,8 @@ def cmd_episode(args) -> int:
     if args.action == "create":
         path = episodes.create_stub(
             vault, tool=args.tool, slug=args.slug or "session", session_ref=args.session_ref or "",
-            retrieved=args.retrieved or [], domains=args.domain or None, project=args.project,
-            duration_min=args.duration,
+            retrieved=args.retrieved, domains=args.domain or None, project=args.project,
+            duration_min=args.duration, session_id=args.session,
         )
         _print(f"episode stub: {vault.rel(path)}")
         return 0
@@ -249,6 +285,9 @@ def cmd_episode(args) -> int:
         if path is None:
             _print("no episode found")
             return 1
+        path = fsutil.checked_regular_path(vault, path)
+        if not vault.rel(path).startswith(config.EPISODES + "/"):
+            raise VaultError("episode show requires a path under episodes/")
         _print(path.read_text(encoding="utf-8"))
         return 0
     return 2
@@ -292,7 +331,7 @@ def _print_run(vault: Vault, report: engine.RunReport) -> int:
         _print(f"  committed {report.commit.sha}")
     elif report.commit:
         _print(f"  {report.commit.message}")
-    return 0
+    return 1 if report.commit and report.commit.failed else 0
 
 
 def cmd_lint(args) -> int:
@@ -301,9 +340,11 @@ def cmd_lint(args) -> int:
     vault = _vault(args)
     issues = []
     domains = domain_names(vault)
-    for rel in (config.INBOX, config.EPISODES, config.KNOWLEDGE, config.PROJECTS):
+    for rel in (config.INBOX, config.EPISODES, config.KNOWLEDGE, config.PROJECTS, config.SKILLS):
         for note in iter_notes(vault, rel):
             if note.type == "index":
+                continue
+            if rel == config.SKILLS and note.type != "skill" and note.path.name != "SKILL.md":
                 continue
             issues.extend(validate_note(note, vault, domains))
     for di in list_domain_indexes(vault):
@@ -347,29 +388,53 @@ def cmd_pack(args) -> int:
 
 def cmd_status(args) -> int:
     vault = _vault(args)
-    inbox = list(iter_notes(vault, config.INBOX))
-    unprocessed = [n for n in inbox if "processed" not in n.meta]
-    eps = [n for n in iter_notes(vault, config.EPISODES) if n.type == "episode"]
-    by_status: dict[str, int] = {}
-    for e in eps:
-        by_status[e.status or "?"] = by_status.get(e.status or "?", 0) + 1
-    from .notes import knowledge_notes
+    from .feedback_status import build_status
 
-    kn = knowledge_notes(vault)
-    kn_status: dict[str, int] = {}
-    for n in kn:
-        kn_status[n.status or "?"] = kn_status.get(n.status or "?", 0) + 1
+    report = build_status(vault, days=args.days)
+    if args.json:
+        _print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    inbox = report["inbox"]
+    recalled = report["recall"]
+    knowledge = report["knowledge"]
+    skills = report["skills"]
+    curation = report["curation"]
     _print(f"vault: {vault.root}")
-    _print(f"inbox: {len(unprocessed)} unprocessed / {len(inbox)} total")
-    _print(f"episodes: {len(eps)} ({', '.join(f'{k}: {v}' for k, v in sorted(by_status.items()))})")
-    _print(f"knowledge: {len(kn)} ({', '.join(f'{k}: {v}' for k, v in sorted(kn_status.items()))})")
+    _print(
+        f"recall ({recalled['window_days']} days): {recalled['attempts']} attempts; "
+        f"{recalled['served_notes']} served notes; {recalled['unique_sessions']} sessions; "
+        f"{recalled['empty_recalls']} empty; {recalled['potential_gaps']} potential gaps"
+    )
+    _print("recall quality: " + ", ".join(f"{key}: {value}" for key, value in recalled["quality"]["counts"].items()))
+    _print(f"inbox: {inbox['pending_count']} unprocessed / {inbox['total']} total")
+    oldest = "unknown" if inbox["oldest_age_days"] is None else f"{inbox['oldest_age_days']} days"
+    _print(
+        f"  high signal: {inbox['high_signal_count']}; episode-linked: {inbox['linked_count']}; "
+        f"research gaps: {inbox['gap_count']}; oldest: {oldest}; overdue: {inbox['overdue_count']}"
+    )
+    _print(f"episodes: {report['episodes']['total']} ({', '.join(f'{key}: {value}' for key, value in report['episodes']['by_status'].items())})")
+    _print(f"knowledge: {knowledge['total']} ({', '.join(f'{key}: {value}' for key, value in knowledge['by_status'].items())})")
+    _print(
+        f"  confidence warnings: {len(knowledge['confidence_warnings'])}; "
+        f"behaviour-change signals: {len(knowledge['behaviour_change_signals'])}"
+    )
+    _print(
+        f"skills: {skills['total']}; potentially stale: {skills['potentially_stale']}; "
+        f"recent failures: {skills['failed_recently']}; needing review: {skills['needs_review']}"
+    )
     _print(f"domains: {', '.join(domain_names(vault)) or '(router missing)'}")
+    _print(f"routing suggestions: {len(report['routing']['suggestions'])}")
+    _print(
+        f"curation: {curation['mode']}; curator: {curation['curator'] or '(single user)'}; "
+        f"pending review: {len(curation['pending_review'])}; conflicts: {curation['conflicts']}"
+    )
     rt = router_token_estimate(vault)
     if rt > config.TOKEN_BUDGET_ROUTER:
         _print(f"warning: router ≈{rt} tokens (budget {config.TOKEN_BUDGET_ROUTER})")
-    files = pending_review_files(vault)
-    if files:
-        _print(f"review pending: {', '.join(vault.rel(f) for f in files)}")
+    if curation["pending_review"]:
+        _print(f"review pending: {', '.join(curation['pending_review'])}")
+    for warning in report["warnings"]:
+        _print(f"warning: {warning}")
     for p in sorted(vault.path(config.CONTEXT_PACKS).glob("*-current.md")) if vault.path(config.CONTEXT_PACKS).is_dir() else []:
         meta, _ = fm_parse(p.read_text(encoding="utf-8"))
         _print(f"pack {p.stem}: {packs.freshness(meta)}")
@@ -432,6 +497,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--domain")
     p.add_argument("--project")
     p.add_argument("--trust", choices=["first-party", "mixed", "third-party", "unknown"])
+    p.add_argument("--signal", choices=["high", "normal", "low"])
+    p.add_argument("--source-episode", help="existing episode supporting this candidate")
     p.add_argument(
         "--structured",
         action="store_true",
@@ -444,6 +511,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tool", default="cli")
     p.add_argument("--session")
     p.add_argument("--task-id", help="explicit V2 task context (strict profile)")
+    p.add_argument("--attempt-id", help="stable identity for an independent recall trial")
+    p.add_argument("--context-tool", help="observed applicable tool, separate from the logging host")
+    p.add_argument("--product")
+    p.add_argument("--version")
+    p.add_argument("--project")
+    p.add_argument("--capture-gap", action="store_true", help="capture a research need when recorded recall is weak or empty")
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-log", action="store_true")
     p.set_defaults(fn=cmd_recall)
@@ -500,6 +573,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_pack)
 
     p = sub.add_parser("status", help="vault state at a glance")
+    p.add_argument("--json", action="store_true", help="structured read-only diagnostics")
+    p.add_argument("--days", type=int, help="recall diagnostic window in days")
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("doctor", help="environment checks; --fix scaffolds")
@@ -507,8 +582,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_doctor)
 
     from .v2_cli import add_parser as add_v2_parser
+    from .feedback_cli import add_parsers as add_feedback_parsers
 
     add_v2_parser(sub)
+    add_feedback_parsers(sub)
     return ap
 
 

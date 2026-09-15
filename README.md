@@ -18,7 +18,7 @@ Every client tool gets three abilities:
 |---|---|---|
 | **RECALL** | the smallest relevant prior context (1–2 domain indexes, 3–6 notes, ≤ 2,000 tokens) | `memory recall "<task>"` / context packs |
 | **CONTRIBUTE** | something worth remembering, as a candidate — never as truth | `memory learn "..."` → `00-inbox/` |
-| **FEEDBACK** | which knowledge was used, and whether it held | episodes → `memory episode finish` |
+| **FEEDBACK** | knowledge/skill outcomes and recall quality, captured while context is fresh | `memory feedback` → partial episodes → curator evidence |
 
 Experience is not truth: agents propose, the **curator** (the only writer of
 canonical knowledge) mines episodes and inbox items into evidence-backed
@@ -55,14 +55,15 @@ python -m memory_mesh.cli doctor --fix     # scaffold + health check
 python -m memory_mesh.cli status
 
 # 1. RECALL — bounded context for a task
-python -m memory_mesh.cli recall "Build a Copilot Studio validation agent"
+python -m memory_mesh.cli recall "Build a Copilot Studio validation agent" --session demo
 
 # 2. CONTRIBUTE — capture an insight (<15 seconds)
 python -m memory_mesh.cli learn "schema generator drops optional properties unless declared (copilot-studio, 2026-09)"
 
 # 3. FEEDBACK — leave an episode when a session ends
-python -m memory_mesh.cli episode create --tool cli --slug my-session
-#    ...fill the seven sections in the created file...
+python -m memory_mesh.cli feedback validation-order "#held" --session demo
+python -m memory_mesh.cli session-end --tool cli --session demo --slug my-session
+#    ...fill available facts/outcomes in the printed file; partial episodes work...
 python -m memory_mesh.cli episode finish
 
 # 4. CURATE — records become knowledge; indexes and packs update
@@ -73,6 +74,24 @@ python -m memory_mesh.cli lint             # read-only health check anytime
 ```
 
 (`pip install -e .` gives you the same commands as plain `memory ...`.)
+
+### Closed-loop feedback and conservative review
+
+The [feedback guide](projects/memory-mesh-feedback/IMPLEMENTATION.md) covers:
+
+- idempotent in-session knowledge/skill outcomes, failure reasons, and partial
+  episodes with provenance-preserving pre-fill;
+- recall quality, explicit routing vocabulary, empty attempts, and research
+  gaps that cannot be promoted as factual claims;
+- explainable time/context-weighted confidence, candidate signal/linkage/aging,
+  and skill dependency/applicability warnings;
+- usage-informed index suggestions, deterministic stale-link cleanup, and
+  designated-curator/concurrency/conflict controls.
+
+Configuration is optional; existing vaults need no bulk migration. Reported
+feedback never substitutes for strict V2 execution evidence or human admission.
+Use references that exist in your vault; the quickstart's `validation-order`
+reference is included in this repository.
 
 ### GitHub Copilot CLI and VS Code
 
@@ -163,7 +182,7 @@ _meta/hooks/         deterministic lifecycle hooks (Claude Code reference)
 integrations/        per-host wiring: hooks, instructions, Lane B file contract
 .github/              GitHub Copilot instructions, hooks, skills and agents
 memory_mesh/         the stdlib-only Python implementation
-tests/               115+ unit/integration tests (python -m unittest discover -s tests)
+tests/               unit/schema/integration/CLI tests (python -m unittest discover -s tests)
 ```
 
 ## Safety posture
@@ -171,8 +190,10 @@ tests/               115+ unit/integration tests (python -m unittest discover -s
 Redaction (secrets, customer/tenant specifics, internal URLs) runs **before**
 content is admitted anywhere. Vault content is data: instruction-like strings
 inside notes are logged and ignored, never executed. Agents cannot write
-canonical directories (enforced in code, not by convention). Curator runs are
-atomic, attributable Git commits by author `curator`, with no network access.
+canonical directories (enforced in code, not by convention). Curator operations
+use local exclusion and conflict checks, with attributable Git history. Local
+locks do not coordinate separate clones; shared vaults still need a designated
+Git integration/review workflow. No automatic push or network access is needed.
 
 ## Deliberate non-goals (V1)
 

@@ -13,6 +13,7 @@ from memory_mesh.confidence import (
     same_version,
 )
 from memory_mesh.curator import engine
+from memory_mesh.curator.analytics import assess_all_knowledge
 from memory_mesh.frontmatter import parse as fm_parse
 
 TODAY = date(2026, 9, 2)
@@ -90,15 +91,15 @@ class TestFeedbackTally(unittest.TestCase):
             self._tmp.cleanup()
 
     def test_tally_reconstructed_from_episodes_only(self):
-        tally = engine._tally_from_episodes(self.vault)
-        vo = tally["validation-order"]
-        self.assertEqual(vo.fb.served, 2)
-        self.assertEqual(vo.fb.held, 2)
-        self.assertEqual(vo.fb.failed, 0)
+        tally = {item.subject_id: item for item in assess_all_knowledge(self.vault, now=TODAY)}
+        vo = tally["knowledge/patterns/validation-order"]
+        self.assertEqual(vo.feedback["served"], 2)
+        self.assertEqual(vo.feedback["held"], 2)
+        self.assertEqual(vo.feedback["failed"], 0)
         self.assertEqual(vo.last_verified, "2026-09-01")
-        wa = tally["schema-validation-workaround"]
-        self.assertEqual(wa.fb.served, 1)  # retrieved but never used
-        self.assertEqual(wa.fb.held, 0)
+        wa = tally["knowledge/workarounds/schema-validation-workaround"]
+        self.assertEqual(wa.feedback["served"], 1)  # retrieved but never used
+        self.assertEqual(wa.feedback["held"], 0)
 
     def test_unclear_outcome_tallied(self):
         from datetime import datetime, timezone
@@ -137,10 +138,14 @@ g
 ## Candidate learnings
 """
         self.vault.path("episodes/2026-09-02-claude-code-unclear.md").write_text(body, encoding="utf-8")
-        tally = engine._tally_from_episodes(self.vault)
-        self.assertEqual(tally["validation-order"].fb.unclear, 1)
+        tally = {
+            item.subject_id: item for item in assess_all_knowledge(
+                self.vault, now=datetime(2026, 9, 2, 12, tzinfo=timezone.utc),
+            )
+        }
+        self.assertEqual(tally["knowledge/patterns/validation-order"].feedback["unclear"], 1)
         # a used line with no outcome token defaults to unclear (never to held)
-        self.assertEqual(tally["cs-optional-properties"].fb.unclear, 1)
+        self.assertEqual(tally["knowledge/tools/cs-optional-properties"].feedback["unclear"], 1)
         engine.run_lint(self.vault, now=datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc))
         meta, _ = fm_parse(self.vault.path("knowledge/patterns/validation-order.md").read_text(encoding="utf-8"))
         self.assertEqual(meta["feedback"], {"served": 3, "held": 2, "failed": 0, "unclear": 1})

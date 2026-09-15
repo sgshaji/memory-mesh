@@ -121,7 +121,10 @@ def _parse_value(tok: str) -> Any:
             if ":" not in part:
                 raise FrontmatterError(f"bad inline mapping entry: {part!r}")
             k, v = part.split(":", 1)
-            d[k.strip().strip("\"'")] = _parse_value(v)
+            key = k.strip().strip("\"'")
+            if key in d:
+                raise FrontmatterError(f"duplicate mapping key: {key}")
+            d[key] = _parse_value(v)
         return d
     return _parse_scalar(tok)
 
@@ -150,6 +153,8 @@ def _parse_block(lines: list[tuple[int, str]], pos: int, indent: int) -> tuple[A
         if not m:
             raise FrontmatterError(f"expected `key: value`, got {content!r}")
         key, rest = m.group(1), m.group(2).strip()
+        if key in mapping:
+            raise FrontmatterError(f"duplicate mapping key: {key}")
         pos += 1
         if rest:
             mapping[key] = _parse_value(rest)

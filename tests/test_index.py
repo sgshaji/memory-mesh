@@ -60,8 +60,10 @@ class TestIndexes(unittest.TestCase):
         self.assertTrue(any("only validated notes belong" in i.message for i in issues))
         engine.run_lint(self.vault, now=NOW)
         di = parse_index(p, self.vault)
-        self.assertFalse(any(e.ref == "validation-order" for e in di.sections["Read first"]))
-        self.assertTrue(any(e.ref == "validation-order" for e in di.sections["Recently changed"]))
+        ref = "knowledge/patterns/validation-order"
+        self.assertFalse(any(e.ref in ("validation-order", ref) for e in di.sections["Read first"]))
+        self.assertFalse(any(e.ref in ("validation-order", ref) for e in di.sections["Recently verified (30 days)"]))
+        self.assertTrue(any(e.ref == ref for e in di.sections["Recently changed"]))
 
     def test_missing_section_is_error_and_lint_fixes(self):
         p = self.vault.path("knowledge/_index/coding-agents.md")
@@ -95,8 +97,8 @@ class TestIndexes(unittest.TestCase):
         engine.run_lint(self.vault, now=NOW)
         di = load_index(self.vault, "copilot-studio")
         rv = {e.ref for e in di.sections["Recently verified (30 days)"]}
-        self.assertIn("validation-order", rv)  # held 2026-09-01, within 30 days
-        self.assertIn("cs-optional-properties", rv)
+        self.assertIn("knowledge/patterns/validation-order", rv)  # held within 30 days
+        self.assertIn("knowledge/tools/cs-optional-properties", rv)
 
 
 if __name__ == "__main__":

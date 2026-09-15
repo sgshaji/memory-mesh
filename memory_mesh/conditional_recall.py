@@ -13,8 +13,8 @@ from .experience_store import RecordStore
 from .experience_types import version_matches
 from .indexes import load_index
 from .learning_flow import validate_note_binding
-from .notes import load_note, resolve_ref
-from .recall import RecallResult, ServedNote, _SECTION_PRIORITY
+from .notes import NoteReferenceError, load_note
+from .recall import RecallResult, ServedNote, _SECTION_PRIORITY, resolve_index_ref
 
 MAX_NOTE_BYTES = 16_384
 
@@ -48,6 +48,8 @@ def recall_for_task(
     vault: Vault, query: str, task_id: str | None, *,
     mode: str, now: datetime | None = None,
 ) -> RecallResult:
+    from .applicability import match_applicability
+
     result = RecallResult([], True, [], mode=mode)
     if mode != "strict":
         result.abstention = "memory_disabled" if mode == "off" else "shadow_profile"
@@ -59,6 +61,7 @@ def recall_for_task(
         return result
     with RecordStore(vault).transaction():
         task = get_task(vault, task_id)
+        result.task_revision = task.revision
         result.domains = router.match(query or task.goal, router.load_domains(vault), limit=2)
         result.unclassified = not result.domains
         if not result.domains:
@@ -70,7 +73,12 @@ def recall_for_task(
             if index is not None:
                 result.indexes.append(index)
             else:
+                result.missing_indexes.append(domain)
                 _reason(result, "missing_domain_index")
+        result.candidate_count = len({
+            entry.ref for index in result.indexes for section in _SECTION_PRIORITY
+            for entry in index.sections.get(section, [])
+        })
         seen = set()
         today = (now or datetime.now().astimezone()).date()
         for section in _SECTION_PRIORITY:
@@ -78,7 +86,11 @@ def recall_for_task(
                 for entry in index.sections.get(section, []):
                     if len(result.notes) >= config.RECALL_MAX_NOTES:
                         break
-                    path = resolve_ref(vault, entry.ref)
+                    try:
+                        path = resolve_index_ref(vault, entry.ref)
+                    except NoteReferenceError:
+                        _reason(result, "invalid_note_reference")
+                        continue
                     if path is None:
                         _reason(result, "missing_note")
                         continue
@@ -111,6 +123,14 @@ def recall_for_task(
                         continue
                     if not set(proposal.conditions).issubset(task.facts):
                         _reason(result, "unknown_conditions")
+                        continue
+                    applicability = match_applicability(
+                        note.meta.get("applies_to"),
+                        context={"tool": task.tool, "version": task.version, "project": task.project},
+                        now=now,
+                    )
+                    if applicability.state == "mismatch":
+                        _reason(result, "inapplicable")
                         continue
                     observed = lesson.receipt["observed_at"][:10]
                     if decay_due(note.type or "", "validated", observed, observed, today):

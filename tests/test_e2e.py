@@ -6,6 +6,7 @@ deletable throughout and Git showing the canonical change.
 """
 
 import io
+import os
 import subprocess
 import unittest
 from contextlib import redirect_stdout
@@ -136,7 +137,7 @@ build the thing
         # 15: git shows the canonical change (when git is available)
         if self.git:
             log = subprocess.run(["git", "-C", str(self.vault.root), "log", "--format=%an %s"],
-                                 capture_output=True, text=True).stdout
+                                 capture_output=True, text=True, env=os.environ.copy(), check=True).stdout
             self.assertIn("curator", log)
 
         # 9: canonical changed only through the curator — the validated note

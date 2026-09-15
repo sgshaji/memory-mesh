@@ -33,6 +33,10 @@ REDACT_FILE = "_meta/redact.txt"
 CURATION_LOG = "_meta/curation-log.md"
 GRADUATION_FILE = "_meta/graduation-candidates.md"
 RECALL_LOG = "_meta/recall-log.tsv"
+SETTINGS_FILE = "_meta/config.md"
+OUTCOME_EVENTS = "episodes/_outcomes"
+RECALL_ATTEMPTS = "episodes/_recalls"
+EXPERIENCE_RECORDS = "projects/_memory-mesh-v2/records"
 REVIEW_DIR = "_meta/review"
 REVIEW_ARCHIVE = "_meta/review/archive"
 SESSION_STATE = "_meta/session-state"
@@ -70,6 +74,7 @@ CURATOR_WRITABLE = (
     "_meta/curation-log.md",
     "_meta/graduation-candidates.md",
     REVIEW_DIR,
+    EXPERIENCE_RECORDS,  # V2 admission ledger changes share the curator transaction.
 )
 
 TOKEN_BUDGET_ROUTER = 300
